@@ -1,4 +1,4 @@
-# jj-tools
+# jj-pr
 
 tools for stacking and rebasing PRs with github using [jujutsu vcs](https://github.com/jj-vcs/jj).
 
@@ -16,10 +16,10 @@ requirements:
 first, install via your package manager of choice:
 
 ```sh
-bun i -g jj-tools
-pnpm i -g jj-tools
-npm i -g jj-tools
-yarn global add jj-tools
+bun i -g jj-pr
+pnpm i -g jj-pr
+npm i -g jj-pr
+yarn global add jj-pr
 ```
 
 next, configure as an alias in `.config/jj/config.toml`:
@@ -29,8 +29,8 @@ next, configure as an alias in `.config/jj/config.toml`:
 [aliases]
 # ....
 # 
-pr = ["util", "exec", "--", 'jjtools', 'pr "$@"', ""]
-# or exec bun run jjtools to use bun instead of node.
+pr = ["util", "exec", "--", 'jj-pr', 'pr "$@"', ""]
+# or exec bun run jj-pr to use bun instead of node.
 ```
 
 
@@ -95,7 +95,7 @@ jj log
 there's an existing bookmark at `rq`. If we want to introduce a new PR, say for `kl` where we do some refactoring that we want in a separate PR, `jj pr kl` will insert a new bookmark at `kl`, create a PR pointing to `trunk()`, and point the existing bookmark at `rq` to the new PR.
 
 
-## Why jj-tools?
+## Why jj-pr?
 
 `jj pr` is a helper that I've slowly built and refined to be the best way to manage PRs with github using `jj`. It is flexible and does not impose any specific workflow. In particular:
 - PRs can be made up of one or more commits. some tools want a strictly patch-based workflow where one commit always corresponds to one PR. `jj pr` allows you to create PRs for one or more commits.

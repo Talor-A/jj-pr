@@ -1,5 +1,5 @@
 {
-  "name": "jjtools",
+  "name": "jj-pr",
   "module": "index.ts",
   "version": "0.1.0",
   "author": {
@@ -9,7 +9,7 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "jjtools": "./dist/index.mjs"
+    "jj-pr": "./dist/index.mjs"
   },
   "files": [
     "dist"
