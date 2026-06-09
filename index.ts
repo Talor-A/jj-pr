@@ -54,9 +54,7 @@ async function getBookmarkPrefix(): Promise<string> {
 
   let prefix = configured;
   if (!prefix) {
-    const email = await exec(
-      `jj --config-file ${jjconf} config get user.email`,
-    )
+    const email = await exec(`jj --config-file ${jjconf} config get user.email`)
       .then(mapToStdout)
       .then((s) => s.trim())
       .catch(() => "");
@@ -206,11 +204,11 @@ async function handlePush(spinner: Ora, revset: string, dryRun: boolean) {
   }
   spinner.stop();
 
-  console.log(dryRunOutput.replace("\nDry-run requested, not pushing.", ""));
-
   if (dryRun) {
+    console.log(dryRunOutput);
     return;
   }
+  console.log(dryRunOutput.replace("\nDry-run requested, not pushing.", ""));
 
   const confirmed = await confirm("\npush these bookmarks? (⏎ / n)");
 
