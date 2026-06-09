@@ -22,6 +22,9 @@ Options:
   -r, --revision <rev>  Revision to process (alternative to positional)
       --dry-run         Preview changes without applying them
   -h, --help            Show this help message
+
+Commands:
+  completion <shell>    Print shell completion script (bash, zsh, or fish)
 `;
 }
 

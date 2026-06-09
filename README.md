@@ -10,7 +10,7 @@ tools for stacking and rebasing PRs with github using [jujutsu vcs](https://gith
 
 requirements:
 
-- `jj`
+- `jj` (`jj-pr` is tested to be compatible with `jj` versions `0.41.0` and `0.42.0`. Other versions may not work.)
 - `gh`
 
 first, install via your package manager of choice:
@@ -22,7 +22,7 @@ npm i -g jj-pr
 yarn global add jj-pr
 ```
 
-next, configure as an alias in `.config/jj/config.toml`:
+optionally, configure as an alias in `.config/jj/config.toml`. This will let you use `jj pr` as an alias for `jj-pr`. The docs below will use `jj pr`, but the two are interchangeable.
 
 ```toml
 
@@ -94,6 +94,13 @@ jj log
 ```
 there's an existing bookmark at `rq`. If we want to introduce a new PR, say for `kl` where we do some refactoring that we want in a separate PR, `jj pr kl` will insert a new bookmark at `kl`, create a PR pointing to `trunk()`, and point the existing bookmark at `rq` to the new PR.
 
+### Shell Completion
+
+```sh
+jj-pr completion zsh > "${fpath[1]}/_jj-pr"          # then restart zsh
+jj-pr completion bash > /etc/bash_completion.d/jj-pr  # or >> ~/.bashrc
+jj-pr completion fish > ~/.config/fish/completions/jj-pr.fish
+```
 
 ## Why jj-pr?
 

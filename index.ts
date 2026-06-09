@@ -15,6 +15,7 @@ import {
   succeeds,
 } from "./lib/exec";
 import { help, parseCli, type CliArgs } from "./lib/args";
+import { completionScript, isShell, SHELLS } from "./lib/completion";
 import {
   findAbandonedBookmarksSince,
   planRebasesFromAbandoned,
@@ -662,9 +663,20 @@ export async function main(spinner: Ora, args: CliArgs) {
 }
 
 if (import.meta.main) {
+  const rawArgs = process.argv.slice(2);
+  if (rawArgs[0] === "completion") {
+    const shell = rawArgs[1];
+    if (!shell || !isShell(shell)) {
+      console.error(`Usage: jj-pr completion <${SHELLS.join("|")}>`);
+      process.exit(1);
+    }
+    console.log(completionScript(shell));
+    process.exit(0);
+  }
+
   const spinner = ora("").start();
   try {
-    const args = parseCli(process.argv.slice(2));
+    const args = parseCli(rawArgs);
 
     if (args.help) {
       spinner.stop();

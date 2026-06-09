@@ -1,0 +1,37 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`completion bash script matches snapshot 1`] = `
+"# bash completion for jj-pr
+# install: jj-pr completion bash > /etc/bash_completion.d/jj-pr
+#      or: jj-pr completion bash >> ~/.bashrc
+_jj_pr() {
+  local cur="\${COMP_WORDS[COMP_CWORD]}"
+  COMPREPLY=( $(compgen -W "--revision --dry-run --help" -- "\${cur}") )
+  return 0
+}
+complete -F _jj_pr jj-pr
+"
+`;
+
+exports[`completion zsh script matches snapshot 1`] = `
+"#compdef jj-pr
+# zsh completion for jj-pr
+# install: jj-pr completion zsh > "\${fpath[1]}/_jj-pr"  (then restart zsh)
+_jj-pr() {
+  _arguments \\
+    '(-r --revision)'{-r,--revision}'[Revision to process]:revset:' \\
+    '--dry-run[Preview changes without applying them]' \\
+    '(-h --help)'{-h,--help}'[Show help message]'
+}
+_jj-pr "$@"
+"
+`;
+
+exports[`completion fish script matches snapshot 1`] = `
+"# fish completion for jj-pr
+# install: jj-pr completion fish > ~/.config/fish/completions/jj-pr.fish
+complete -c jj-pr -s r -l revision -d 'Revision to process' -r
+complete -c jj-pr -l dry-run -d 'Preview changes without applying them'
+complete -c jj-pr -s h -l help -d 'Show help message'
+"
+`;
