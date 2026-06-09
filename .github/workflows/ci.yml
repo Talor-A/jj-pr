@@ -35,7 +35,7 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           gh release download "$tag" --repo jj-vcs/jj \
             --pattern "jj-${tag}-x86_64-unknown-linux-musl.tar.gz" \
-            --output - | tar xz -C "$HOME/.local/bin" jj
+            --output - | tar xz -C "$HOME/.local/bin" ./jj
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: bun install --frozen-lockfile
       - run: bun run test
