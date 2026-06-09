@@ -1,12 +1,15 @@
 {
-  "name": "bun-test",
+  "name": "jjtools",
   "module": "index.ts",
   "type": "module",
   "private": true,
-  "devDependencies": {
-    "@types/bun": "latest"
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "bun build index.ts --compile --outfile dist/jjtools",
+    "test": "bun test"
   },
-  "peerDependencies": {
+  "devDependencies": {
+    "@types/bun": "latest",
     "typescript": "^5"
   },
   "dependencies": {
