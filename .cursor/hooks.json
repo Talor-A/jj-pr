@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "/Users/ta/.dotfiles/dot-cursor/scripts/jj-try-new.sh"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "/Users/ta/.dotfiles/dot-cursor/scripts/jj-try-new.sh"
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "/Users/ta/.dotfiles/dot-cursor/scripts/jj-try-new.sh"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "/Users/ta/.dotfiles/dot-cursor/scripts/jj-snapshot.sh"
+      }
+    ],
+    "stop": [
+      {
+        "command": "/Users/ta/.dotfiles/dot-cursor/scripts/jj-try-new.sh"
+      }
+    ]
+  }
+}
