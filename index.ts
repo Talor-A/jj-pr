@@ -158,7 +158,7 @@ async function handlePush(spinner: Ora, revset: string, dryRun: boolean) {
   spinner.text = "planning push...";
 
   const dryRunOutput = await exec(
-    `jj --config-file ${jjconf} git push --allow-new --dry-run -r '${revset}'`,
+    `jj --config-file ${jjconf} git push --dry-run -r '${revset}'`,
   )
     .then(combineStdoutAndStderr)
     .then((str) => str.trim());
@@ -183,7 +183,7 @@ async function handlePush(spinner: Ora, revset: string, dryRun: boolean) {
 
   spinner.text = "pushing...";
   spinner.start();
-  await exec(`jj --config-file ${jjconf} git push --allow-new -r '${revset}'`);
+  await exec(`jj --config-file ${jjconf} git push -r '${revset}'`);
 }
 
 async function ensureTrunk(): Promise<string> {

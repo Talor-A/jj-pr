@@ -66,7 +66,7 @@ class JJ {
   }
 
   git_push_bookmark(bookmark: string) {
-    return $`jj --config-file ${jjconf} git push --allow-new --bookmark ${bookmark}`
+    return $`jj --config-file ${jjconf} git push --bookmark ${bookmark}`
       .cwd(this.path)
       .quiet();
   }
