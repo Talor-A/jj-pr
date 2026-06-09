@@ -106,6 +106,25 @@ export async function opLogIds(limit: number = 1000): Promise<string[]> {
   );
 }
 
+async function operationsSince(
+  beforeOpId: string,
+  currentOpId: string,
+): Promise<Operation[]> {
+  const opLog = await exec(
+    `jj op log --ignore-working-copy --at-op=${currentOpId} -n 1000 --no-graph --color=never -T 'json(self) ++ "\\n"'`,
+  ).then(mapToStdout);
+  const operations = parseOperations(opLog);
+  const beforeIndex = operations.findIndex(
+    (operation) => operation.id === beforeOpId,
+  );
+
+  if (beforeIndex === -1) {
+    fail(`Operation not found in current history: ${beforeOpId}`);
+  }
+
+  return operations.slice(0, beforeIndex).reverse();
+}
+
 export function resolveRebaseCheckpoint(
   lastCheckedOp: string | null | undefined,
   currentOp: string,
@@ -129,9 +148,7 @@ export async function findLatestFetchOperation(
     `jj op log --no-graph --limit ${String(limit)} --color=never -T 'json(self) ++ "\\n"'`,
   ).then(mapToStdout);
 
-  const fetchOp = parseOperations(opLog).find((operation) =>
-    /^jj git fetch(?:\s|$)/.test(operation.args),
-  );
+  const fetchOp = parseOperations(opLog).find(isFetchOperation);
 
   if (fetchOp === undefined) {
     return null;
@@ -162,24 +179,76 @@ async function localBookmarksAt(
   );
 }
 
+async function trunkCommitAt(operation: string): Promise<string | undefined> {
+  const output = await exec(
+    `jj --at-op ${operation} log --no-graph -r 'trunk()' -T 'commit_id ++ "\\n"'`,
+  ).then(mapToStdout);
+  return lines(output)[0];
+}
+
+function isFetchOperation(operation: Operation): boolean {
+  return /(?:^|\s)git fetch(?:\s|$)/.test(operation.args);
+}
+
+function removedBookmarks(
+  before: Map<string, BookmarkJson>,
+  after: Map<string, BookmarkJson>,
+): AbandonedBookmark[] {
+  const removed: AbandonedBookmark[] = [];
+  for (const [name, bookmark] of before) {
+    const previousCommit = bookmark.target?.[0];
+    if (previousCommit === undefined || after.has(name)) {
+      continue;
+    }
+
+    removed.push({ name, previousCommit });
+  }
+  return removed;
+}
+
 export async function findAbandonedBookmarksBetween(
   beforeOpId: string,
   afterOpId: string,
 ): Promise<AbandonedBookmark[]> {
   const before = await localBookmarksAt(beforeOpId);
   const after = await localBookmarksAt(afterOpId);
+  return removedBookmarks(before, after);
+}
 
-  const abandoned: AbandonedBookmark[] = [];
-  for (const [name, previous] of before) {
-    const previousCommit = previous.target?.[0];
-    if (previousCommit === undefined || after.has(name)) {
-      continue;
+export async function findBookmarksRemovedByMergeFetchSince(
+  beforeOpId: string,
+  currentOpId: string,
+): Promise<AbandonedBookmark[]> {
+  const operations = await operationsSince(beforeOpId, currentOpId);
+  let previousBookmarks = await localBookmarksAt(beforeOpId);
+  let previousTrunk = await trunkCommitAt(beforeOpId);
+  const removedByName = new Map<string, AbandonedBookmark>();
+
+  for (const operation of operations) {
+    const currentBookmarks = await localBookmarksAt(operation.id);
+    const currentTrunk = await trunkCommitAt(operation.id);
+
+    if (
+      isFetchOperation(operation) &&
+      previousTrunk !== undefined &&
+      currentTrunk !== undefined &&
+      previousTrunk !== currentTrunk
+    ) {
+      for (const removed of removedBookmarks(
+        previousBookmarks,
+        currentBookmarks,
+      )) {
+        removedByName.set(removed.name, removed);
+      }
     }
 
-    abandoned.push({ name, previousCommit });
+    previousBookmarks = currentBookmarks;
+    previousTrunk = currentTrunk;
   }
 
-  return abandoned;
+  return [...removedByName.values()].filter(
+    (bookmark) => !previousBookmarks.has(bookmark.name),
+  );
 }
 
 export async function findAbandonedBookmarks(
@@ -209,7 +278,10 @@ export async function findAbandonedBookmarksSince(
     return { abandoned: [], currentOp, stalePointer };
   }
 
-  const abandoned = await findAbandonedBookmarksBetween(beforeOp, currentOp);
+  const abandoned = await findBookmarksRemovedByMergeFetchSince(
+    beforeOp,
+    currentOp,
+  );
   return { abandoned, currentOp, stalePointer };
 }
 

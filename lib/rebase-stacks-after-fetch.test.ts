@@ -24,7 +24,7 @@ async function makeTempDir(): Promise<string> {
   return realpath(await mkdtemp(join(tmpdir(), "jj-rebase-test-")));
 }
 
-async function setupTempJjRepo(): Promise<{ repo: string }> {
+async function setupTempJjRepo(): Promise<{ origin: string; repo: string }> {
   const root = await makeTempDir();
   const origin = join(root, "origin.git");
   const repo = join(root, "work");
@@ -33,7 +33,7 @@ async function setupTempJjRepo(): Promise<{ repo: string }> {
   await $`jj --config-file ${jjconf} git clone ${origin} ${repo}`.quiet();
   cleanups.push(() => rm(root, { force: true, recursive: true }));
 
-  return { repo };
+  return { origin, repo };
 }
 
 async function setupMainBranch(repo: string) {
@@ -69,6 +69,39 @@ async function withRepoCwd<T>(repo: string, fn: () => Promise<T>): Promise<T> {
   } finally {
     process.chdir(originalCwd);
   }
+}
+
+async function mergeAndDeleteBranchInOrigin(origin: string, bookmark: string) {
+  const clone = await makeTempDir();
+  cleanups.push(() => rm(clone, { force: true, recursive: true }));
+
+  await $`git clone --branch main ${origin} ${clone}`.quiet();
+  await $`git -c user.name="Merge Bot" -c user.email="merge@example.com" merge --no-ff --no-edit ${`origin/${bookmark}`}`
+    .cwd(clone)
+    .quiet();
+  await $`git push origin main`.cwd(clone).quiet();
+  await $`git push origin --delete ${bookmark}`.cwd(clone).quiet();
+}
+
+async function deleteBranchInOrigin(origin: string, bookmark: string) {
+  const clone = await makeTempDir();
+  cleanups.push(() => rm(clone, { force: true, recursive: true }));
+
+  await $`git clone --branch main ${origin} ${clone}`.quiet();
+  await $`git push origin --delete ${bookmark}`.cwd(clone).quiet();
+}
+
+async function advanceMainInOrigin(origin: string) {
+  const clone = await makeTempDir();
+  cleanups.push(() => rm(clone, { force: true, recursive: true }));
+
+  await $`git clone --branch main ${origin} ${clone}`.quiet();
+  await writeFile(join(clone, "main.txt"), "main\n");
+  await $`git add main.txt`.cwd(clone).quiet();
+  await $`git -c user.name="Merge Bot" -c user.email="merge@example.com" commit -m "advance main"`
+    .cwd(clone)
+    .quiet();
+  await $`git push origin main`.cwd(clone).quiet();
 }
 
 describe("resolveRebaseCheckpoint", () => {
@@ -132,16 +165,20 @@ describe("stackRootsAbove", () => {
 });
 
 describe("findAbandonedBookmarksSince", () => {
-  test("detects bookmarks deleted after the saved checkpoint", async () => {
-    const { repo } = await setupTempJjRepo();
+  test("detects bookmarks removed by a merge fetch", async () => {
+    const { origin, repo } = await setupTempJjRepo();
     await setupMainBranch(repo);
 
+    const bookmark = "ta/jj/feature";
     await writeFile(join(repo, "feature.txt"), "feature\n");
     await $`jj --config-file ${jjconf} desc -m feature`.cwd(repo).quiet();
-    await $`jj --config-file ${jjconf} bookmark create ta/jj/feature --revision @`
+    await $`jj --config-file ${jjconf} bookmark create ${bookmark} --revision @`
       .cwd(repo)
       .quiet();
     const commitId = await logField(repo, "@", "commit_id");
+    await $`jj --config-file ${jjconf} git push --bookmark ${bookmark}`
+      .cwd(repo)
+      .quiet();
 
     const checkpointOp = await withRepoCwd(repo, () => getCurrentOperationId());
     const gitDir = (
@@ -149,16 +186,15 @@ describe("findAbandonedBookmarksSince", () => {
     ).trim();
     await saveRebaseState(gitDir, checkpointOp);
 
-    await $`jj --config-file ${jjconf} bookmark delete ta/jj/feature`
-      .cwd(repo)
-      .quiet();
+    await mergeAndDeleteBranchInOrigin(origin, bookmark);
+    await $`jj --config-file ${jjconf} git fetch`.cwd(repo).quiet();
 
     const result = await withRepoCwd(repo, () =>
       findAbandonedBookmarksSince(checkpointOp),
     );
 
     expect(result.abandoned).toEqual([
-      { name: "ta/jj/feature", previousCommit: commitId },
+      { name: bookmark, previousCommit: commitId },
     ]);
     expect(result.stalePointer).toBe(false);
   });
@@ -175,13 +211,18 @@ describe("findAbandonedBookmarksSince", () => {
     expect(result.stalePointer).toBe(false);
   });
 
-  test("regression: detects abandonment outside the latest fetch op", async () => {
-    const { repo } = await setupTempJjRepo();
+  test("regression: uses the last known branch head before a merge fetch", async () => {
+    const { origin, repo } = await setupTempJjRepo();
     await setupMainBranch(repo);
 
+    const bookmark = "ta/jj/feature";
     await writeFile(join(repo, "feature.txt"), "feature\n");
     await $`jj --config-file ${jjconf} desc -m feature`.cwd(repo).quiet();
-    await $`jj --config-file ${jjconf} bookmark create ta/jj/feature --revision @`
+    await $`jj --config-file ${jjconf} bookmark create ${bookmark} --revision @`
+      .cwd(repo)
+      .quiet();
+    const firstCommitId = await logField(repo, "@", "commit_id");
+    await $`jj --config-file ${jjconf} git push --bookmark ${bookmark}`
       .cwd(repo)
       .quiet();
 
@@ -191,20 +232,72 @@ describe("findAbandonedBookmarksSince", () => {
     ).trim();
     await saveRebaseState(gitDir, checkpointOp);
 
-    await $`jj --config-file ${jjconf} bookmark delete ta/jj/feature`
+    await $`jj --config-file ${jjconf} new`.cwd(repo).quiet();
+    await writeFile(join(repo, "feature-followup.txt"), "feature followup\n");
+    await $`jj --config-file ${jjconf} desc -m "feature followup"`
       .cwd(repo)
       .quiet();
-    await $`jj --config-file ${jjconf} desc -m "unrelated follow-up"`
+    await $`jj --config-file ${jjconf} bookmark move ${bookmark} --to @`
       .cwd(repo)
       .quiet();
+    const lastCommitId = await logField(repo, "@", "commit_id");
+    await $`jj --config-file ${jjconf} git push --bookmark ${bookmark}`
+      .cwd(repo)
+      .quiet();
+
+    await mergeAndDeleteBranchInOrigin(origin, bookmark);
+    await $`jj --config-file ${jjconf} git fetch`.cwd(repo).quiet();
 
     const state = await loadRebaseState(gitDir);
     const result = await withRepoCwd(repo, () =>
       findAbandonedBookmarksSince(state!.lastCheckedOp),
     );
 
-    expect(result.abandoned.map((item) => item.name)).toEqual([
-      "ta/jj/feature",
+    expect(result.abandoned).toEqual([
+      { name: bookmark, previousCommit: lastCommitId },
     ]);
+    expect(result.abandoned[0]?.previousCommit).not.toBe(firstCommitId);
+  });
+
+  test("ignores fetches that remove a bookmark without moving trunk", async () => {
+    const { origin, repo } = await setupTempJjRepo();
+    await setupMainBranch(repo);
+
+    const bookmark = "ta/jj/feature";
+    await writeFile(join(repo, "feature.txt"), "feature\n");
+    await $`jj --config-file ${jjconf} desc -m feature`.cwd(repo).quiet();
+    await $`jj --config-file ${jjconf} bookmark create ${bookmark} --revision @`
+      .cwd(repo)
+      .quiet();
+    await $`jj --config-file ${jjconf} git push --bookmark ${bookmark}`
+      .cwd(repo)
+      .quiet();
+
+    const checkpointOp = await withRepoCwd(repo, () => getCurrentOperationId());
+
+    await deleteBranchInOrigin(origin, bookmark);
+    await $`jj --config-file ${jjconf} git fetch`.cwd(repo).quiet();
+
+    const result = await withRepoCwd(repo, () =>
+      findAbandonedBookmarksSince(checkpointOp),
+    );
+
+    expect(result.abandoned).toEqual([]);
+  });
+
+  test("ignores fetches that move trunk without removing a bookmark", async () => {
+    const { origin, repo } = await setupTempJjRepo();
+    await setupMainBranch(repo);
+
+    const checkpointOp = await withRepoCwd(repo, () => getCurrentOperationId());
+
+    await advanceMainInOrigin(origin);
+    await $`jj --config-file ${jjconf} git fetch`.cwd(repo).quiet();
+
+    const result = await withRepoCwd(repo, () =>
+      findAbandonedBookmarksSince(checkpointOp),
+    );
+
+    expect(result.abandoned).toEqual([]);
   });
 });
