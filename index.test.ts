@@ -10,7 +10,7 @@ import { exec } from "./lib/exec";
 import { TEST_JJ_CONFIG } from "./lib/config";
 
 const bun = process.execPath;
-const pathToIndexFile = join(__dirname, "index.ts");
+const pathToIndexFile = join(import.meta.dirname, "index.ts");
 const jjconf = TEST_JJ_CONFIG;
 
 async function makeTempDir(): Promise<string> {
