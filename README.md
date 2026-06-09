@@ -102,13 +102,13 @@ for example, given a log like this:
 ```sh
 jj log
 
-@  lxnsotyp public-github@taloranderson.com 2026-06-08 18:24:51 default@ 9f5f5e48
+@  lxnsotyp                         @                           9f5f5e48
 │  (empty) (no description set)
-◇  rqmkxwvo public-github@taloranderson.com 2026-06-08 18:24:42 ta/jj/add-streaming-test eeb7e010
+◇  rqmkxwvo                         ta/jj/add-streaming-test    eeb7e010
 │  add streaming test
-◇  uvxnkynk public-github@taloranderson.com 2026-06-08 13:41:35 dbb151e9
+◇  uvxnkynk                                                     dbb151e9
 │  convert runBash to streamBash
-◇  klrvwsvr public-github@taloranderson.com 2026-06-08 13:40:10 59c4fda6
+◇  klrvwsvr                                                     59c4fda6
 │  refactor bash utils
 ~
 ```
