@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { z } from "zod";

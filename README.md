@@ -30,6 +30,7 @@ next, configure as an alias in `.config/jj/config.toml`:
 # ....
 # 
 pr = ["util", "exec", "--", 'jjtools', 'pr "$@"', ""]
+# or exec bun run jjtools to use bun instead of node.
 ```
 
 
@@ -41,7 +42,8 @@ jj pr --help
 
 basic usage:
 ```sh
-# create a PR at the nearest change.
+# create a PR at the nearest pushable change.
+# ignores changes that can't be pushed (eg missing descriptions)
 jj pr
 ```
 

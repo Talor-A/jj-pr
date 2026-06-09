@@ -1,12 +1,22 @@
 {
   "name": "jjtools",
   "module": "index.ts",
+  "version": "0.1.0",
+  "author": {
+    "name": "Talor Anderson",
+    "email": "public-github@taloranderson.com"
+  },
+  "license": "MIT",
   "type": "module",
   "bin": {
     "jjtools": "./dist/index.mjs"
   },
-  "private": true,
+  "files": [
+    "dist"
+  ],
   "scripts": {
+    "prepublishOnly": "bun run build",
+    "prepack": "bun run build",
     "typecheck": "tsc --noEmit",
     "build": "tsdown index.ts",
     "test": "bun test"
