@@ -285,8 +285,10 @@ async function approveAndPushNewBookmarks(
   spinner.stop();
   console.log(`New bookmarks:\n${newBookmarks.join("\n")}`);
 
-  if (dryRun) process.exit(0);
-
+  if (dryRun) {
+    console.log("dry run: skipping push.");
+    process.exit(0);
+  }
   const shouldPush = await confirm("push new bookmarks? (⏎ / n)");
   if (!shouldPush) {
     process.exit(0);

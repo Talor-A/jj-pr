@@ -267,64 +267,64 @@ async function runRebasePlans(plans: RebasePlan[], apply: boolean) {
   }
 }
 
-async function main() {
-  const { apply, op, limit, fetch } = parseArgs();
-  const gitDir = await absoluteGitDir();
+// async function main() {
+//   const { apply, op, limit, fetch } = parseArgs();
+//   const gitDir = await absoluteGitDir();
 
-  let abandoned: AbandonedBookmark[] = [];
+//   let abandoned: AbandonedBookmark[] = [];
 
-  if (op !== undefined) {
-    abandoned = await findAbandonedBookmarks(await getOperation(op));
-  } else if (fetch) {
-    const operation = await findLatestFetchOperation(limit);
-    if (operation === null) {
-      console.log(
-        `No fetch operation found within the last ${limit} operations.`,
-      );
-      process.exit(0);
-    }
-    abandoned = await findAbandonedBookmarks(operation);
-  } else {
-    const state = await loadRebaseState(gitDir);
-    const result = await findAbandonedBookmarksSince(
-      state?.lastCheckedOp ?? null,
-    );
-    if (result.stalePointer) {
-      console.log(
-        "Rebase checkpoint not found in current op history; resetting checkpoint.",
-      );
-    }
-    abandoned = result.abandoned;
-  }
+//   if (op !== undefined) {
+//     abandoned = await findAbandonedBookmarks(await getOperation(op));
+//   } else if (fetch) {
+//     const operation = await findLatestFetchOperation(limit);
+//     if (operation === null) {
+//       console.log(
+//         `No fetch operation found within the last ${limit} operations.`,
+//       );
+//       process.exit(0);
+//     }
+//     abandoned = await findAbandonedBookmarks(operation);
+//   } else {
+//     const state = await loadRebaseState(gitDir);
+//     const result = await findAbandonedBookmarksSince(
+//       state?.lastCheckedOp ?? null,
+//     );
+//     if (result.stalePointer) {
+//       console.log(
+//         "Rebase checkpoint not found in current op history; resetting checkpoint.",
+//       );
+//     }
+//     abandoned = result.abandoned;
+//   }
 
-  if (abandoned.length === 0) {
-    console.log("No abandoned local bookmarks found since last checkpoint.");
-    if (!apply && op === undefined) {
-      await saveRebaseCheckpoint(gitDir);
-    }
-    process.exit(0);
-  }
+//   if (abandoned.length === 0) {
+//     console.log("No abandoned local bookmarks found since last checkpoint.");
+//     if (!apply && op === undefined) {
+//       await saveRebaseCheckpoint(gitDir);
+//     }
+//     process.exit(0);
+//   }
 
-  const plans = await planRebasesFromAbandoned(abandoned);
+//   const plans = await planRebasesFromAbandoned(abandoned);
 
-  if (plans.length === 0) {
-    console.log(
-      "Found abandoned bookmarks, but no mutable descendants to rebase.",
-    );
-    if (!apply && op === undefined) {
-      await saveRebaseCheckpoint(gitDir);
-    }
-    process.exit(0);
-  }
+//   if (plans.length === 0) {
+//     console.log(
+//       "Found abandoned bookmarks, but no mutable descendants to rebase.",
+//     );
+//     if (!apply && op === undefined) {
+//       await saveRebaseCheckpoint(gitDir);
+//     }
+//     process.exit(0);
+//   }
 
-  console.log(apply ? "Applying rebases:" : "Dry run. Rebase plan:");
-  await runRebasePlans(plans, apply);
+//   console.log(apply ? "Applying rebases:" : "Dry run. Rebase plan:");
+//   await runRebasePlans(plans, apply);
 
-  if (apply && op === undefined) {
-    await saveRebaseCheckpoint(gitDir);
-  }
-}
+//   if (apply && op === undefined) {
+//     await saveRebaseCheckpoint(gitDir);
+//   }
+// }
 
-if (import.meta.main) {
-  await main();
-}
+// if (import.meta.main) {
+//   await main();
+// }
