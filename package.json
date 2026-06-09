@@ -12,7 +12,8 @@
     "jj-pr": "dist/index.mjs"
   },
   "files": [
-    "dist"
+    "dist",
+    "config.toml"
   ],
   "scripts": {
     "prepublishOnly": "bun run build",
