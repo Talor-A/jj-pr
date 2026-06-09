@@ -1,0 +1,14 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`main creates a PR based on another user's tracked branch 1`] = `
+"New bookmarks:
+test/jj/ours
+push new bookmarks? (⏎ / n) create these PRs:
+test/jj/ours -> theirs
+
+update PRs? ## PR Stack
+- https://github.com/example/repo/pull/1
+- \`main\`
+
+"
+`;

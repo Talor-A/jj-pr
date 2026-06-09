@@ -1,6 +1,15 @@
 import { $, write } from "bun";
 import { afterAll, expect, test, describe } from "bun:test";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bookmarkHead, bookmarkHeadsForChange } from "./index";
@@ -11,6 +20,7 @@ import { TEST_JJ_CONFIG } from "./lib/config";
 
 const bun = process.execPath;
 const pathToIndexFile = join(import.meta.dirname, "index.ts");
+const pathToFakeGh = join(import.meta.dirname, "test/fixtures/fake-gh.ts");
 const jjconf = TEST_JJ_CONFIG;
 
 async function makeTempDir(): Promise<string> {
@@ -155,6 +165,24 @@ async function createGitBranchWithDifferentCommitter(
     .cwd(clone)
     .quiet();
   await $`git push origin ${bookmark}`.cwd(clone).quiet();
+}
+
+async function setupFakeGh(
+  state: object = { nextNumber: 1, prs: [] },
+): Promise<{ binDir: string; statePath: string }> {
+  const root = await makeTempDir();
+  cleanups.push(() => rm(root, { force: true, recursive: true }));
+
+  const binDir = join(root, "bin");
+  const statePath = join(root, "gh-state.json");
+  const ghPath = join(binDir, "gh");
+
+  await mkdir(binDir);
+  await writeFile(statePath, JSON.stringify(state));
+  await copyFile(pathToFakeGh, ghPath);
+  await chmod(ghPath, 0o755);
+
+  return { binDir, statePath };
 }
 
 const logTemplate =
@@ -471,6 +499,88 @@ describe("main", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr.toString()).toContain("Unable to find trunk bookmark");
   });
+
+  test("creates a PR based on another user's tracked branch with an existing PR", async () => {
+    const { origin, repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+    await $`jj --config-file ${jjconf} config set --repo jj-pr.bookmark-prefix test/jj/`
+      .cwd(repo)
+      .quiet();
+    await createGitBranchWithDifferentCommitter(origin, "theirs");
+    await jj.git_fetch();
+    await $`jj --config-file ${jjconf} bookmark track theirs --remote=origin`
+      .cwd(repo)
+      .quiet();
+
+    const authorEmail = (
+      await $`jj --config-file ${jjconf} log -r theirs --no-graph -T 'author.email() ++ "\n"'`
+        .cwd(repo)
+        .text()
+    ).trim();
+    expect(authorEmail).toBe("other@example.com");
+
+    await jj.new("theirs");
+    await writeFile(join(repo, "ours.txt"), "ours\n");
+    await jj.describe("@", "ours");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 2,
+      prs: [
+        {
+          number: 1,
+          head: "theirs",
+          title: "theirs",
+          baseRefName: "main",
+          body: "theirs body",
+        },
+      ],
+    });
+    const proc = Bun.spawn(["sh", "-c", 'yes "" | "$BUN_EXE" "$JJ_PR_INDEX"'], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        BUN_EXE: bun,
+        FAKE_GH_STATE: statePath,
+        JJ_PR_INDEX: pathToIndexFile,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/ours");
+    expect(stdout).toContain("create these PRs:\ntest/jj/ours -> theirs");
+    expect(stdout).toContain(
+      "## PR Stack\n- https://github.com/example/repo/pull/2\n- `main`",
+    );
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([
+      {
+        number: 1,
+        head: "theirs",
+        title: "theirs",
+        baseRefName: "main",
+        body: "theirs body",
+      },
+      {
+        number: 2,
+        head: "test/jj/ours",
+        title: "test/jj/ours",
+        baseRefName: "theirs",
+        body: "## PR Stack\n- https://github.com/example/repo/pull/2\n- `main`\n",
+      },
+    ]);
+  }, 15000);
 
   test("exits cleanly if no stack", async () => {
     const { repo } = await setupTempJjRepo();
