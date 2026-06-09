@@ -3,6 +3,13 @@ import { z } from "zod";
 import { exec, mapToStdout } from "./exec";
 import fs from "node:fs/promises";
 
+async function exists(path: string): Promise<boolean> {
+  return fs.access(path).then(
+    () => true,
+    () => false,
+  );
+}
+
 const RebaseStateSchema = z.object({
   version: z.literal(1),
   lastCheckedOp: z.string(),
@@ -23,7 +30,7 @@ export async function absoluteGitDir(): Promise<string> {
 export async function loadRebaseState(
   gitDir: string,
 ): Promise<RebaseState | null> {
-  if (!(await fs.exists(rebaseStatePath(gitDir)))) {
+  if (!(await exists(rebaseStatePath(gitDir)))) {
     return null;
   }
 
