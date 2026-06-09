@@ -28,11 +28,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - name: Install jj
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          version=$(curl -fsSL https://api.github.com/repos/jj-vcs/jj/releases/latest | jq -r .tag_name | sed 's/^v//')
+          tag=$(gh release view --repo jj-vcs/jj --json tagName -q .tagName)
           mkdir -p "$HOME/.local/bin"
-          curl -fsSL "https://github.com/jj-vcs/jj/releases/download/v${version}/jj-v${version}-x86_64-unknown-linux-musl.tar.gz" \
-            | tar xz -C "$HOME/.local/bin" jj
+          gh release download "$tag" --repo jj-vcs/jj \
+            --pattern "jj-${tag}-x86_64-unknown-linux-musl.tar.gz" \
+            --output - | tar xz -C "$HOME/.local/bin" jj
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: bun install --frozen-lockfile
       - run: bun run test
