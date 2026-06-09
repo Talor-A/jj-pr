@@ -1,0 +1,16 @@
+{
+  "name": "bun-test",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "ora": "^9.4.0",
+    "zod": "4"
+  }
+}

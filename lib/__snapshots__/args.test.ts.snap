@@ -1,0 +1,17 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`parseCli help matches snapshot 1`] = `
+"Usage: jj pr [options] [revset]
+
+Sync jj bookmarks with GitHub PRs: fetch, rebase stacks, push bookmarks,
+create or update PRs, and maintain PR stack descriptions.
+
+Arguments:
+  revset                Revision to process (default: closest_pushable(@))
+
+Options:
+  -r, --revision <rev>  Revision to process (alternative to positional)
+      --dry-run         Preview changes without applying them
+  -h, --help            Show this help message
+"
+`;
