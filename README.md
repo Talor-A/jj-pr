@@ -4,7 +4,18 @@ tools for stacking and rebasing PRs with github using [jujutsu vcs](https://gith
 
 ## Description
 
+`jj pr` is a helper that I've slowly built and refined to be the best way to manage Pull Requests with GitHub using `jj` (jujutsu) vcs.  
 
+PR stacking with plain git is a difficult and error-prone process. `jj` itself alleviates many of these issues. It provides seamless tools to split, reorder, rebase, and combine changes. `jj pr` adds a layer on top of `jj` to make PR management easier. 
+
+Given a stack of commits, `jj pr` supports:
+- turning one or more commits into a PR
+- automatically pointing PRs to previous PRs in stack
+- inserting PRs anywhere at the top, bottom, or middle of the stack
+ 
+Some notes on the implementation:
+- PRs can be made up of one or more commits. some tools want a strictly patch-based workflow where one commit always corresponds to one PR. `jj pr` allows you to create PRs for one or more commits.
+- PRs will have bookmarks automatically generated if they don't exist. If you want to name your bookmarks in a certain way, you can create them first before running `jj pr`, and they will be reused automatically.
 
 ## Install
 
@@ -101,9 +112,3 @@ jj-pr completion zsh > "${fpath[1]}/_jj-pr"          # then restart zsh
 jj-pr completion bash > /etc/bash_completion.d/jj-pr  # or >> ~/.bashrc
 jj-pr completion fish > ~/.config/fish/completions/jj-pr.fish
 ```
-
-## Why jj-pr?
-
-`jj pr` is a helper that I've slowly built and refined to be the best way to manage PRs with github using `jj`. It is flexible and does not impose any specific workflow. In particular:
-- PRs can be made up of one or more commits. some tools want a strictly patch-based workflow where one commit always corresponds to one PR. `jj pr` allows you to create PRs for one or more commits.
-- PRs will have bookmarks automatically generated if they don't exist. If you want to name your bookmarks in a certain way, you can create them first before running `jj pr`, and they will be reused automatically.
