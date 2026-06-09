@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { exec, mapToStdout } from "./exec";
+import fs from "node:fs/promises";
 
 const RebaseStateSchema = z.object({
   version: z.literal(1),
@@ -22,12 +23,13 @@ export async function absoluteGitDir(): Promise<string> {
 export async function loadRebaseState(
   gitDir: string,
 ): Promise<RebaseState | null> {
-  const file = Bun.file(rebaseStatePath(gitDir));
-  if (!(await file.exists())) {
+  if (!(await fs.exists(rebaseStatePath(gitDir)))) {
     return null;
   }
 
-  return RebaseStateSchema.parse(await file.json());
+  return RebaseStateSchema.parse(
+    JSON.parse(await fs.readFile(rebaseStatePath(gitDir), "utf8")),
+  );
 }
 
 export async function saveRebaseState(
@@ -35,8 +37,8 @@ export async function saveRebaseState(
   lastCheckedOp: string,
 ): Promise<void> {
   const state: RebaseState = { version: 1, lastCheckedOp };
-  await Bun.write(
+  await fs.writeFile(
     rebaseStatePath(gitDir),
-    JSON.stringify(state, null, 2) + "\n",
+    `${JSON.stringify(state, null, 2)}\n`,
   );
 }
