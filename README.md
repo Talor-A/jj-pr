@@ -29,7 +29,7 @@ next, configure as an alias in `.config/jj/config.toml`:
 [aliases]
 # ....
 # 
-pr = ["util", "exec", "--", 'jj-pr', 'pr "$@"', ""]
+pr = ["util", "exec", "--", 'jj-pr', "$@"]
 # or exec bun run jj-pr to use bun instead of node.
 ```
 
