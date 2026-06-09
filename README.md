@@ -44,6 +44,15 @@ pr = ["util", "exec", "--", 'jj-pr', "$@"]
 # or exec bun run jj-pr to use bun instead of node.
 ```
 
+you can also configure a custom bookmark prefix in your `jj` config:
+
+```toml
+[jj-pr]
+bookmark-prefix = "ta/jj/"
+```
+
+the default prefix is `<user>/jj/` derived from `user.email`.
+
 
 ## Usage
 

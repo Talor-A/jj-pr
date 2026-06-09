@@ -2,6 +2,9 @@
 name = "jj-ts tests"
 email = "jj-ts-tests@example.com"
 
+[jj-pr]
+bookmark-prefix = "test/jj/"
+
 [revset-aliases]
 'unpushable(to)' = '::to & mutable() & (description(exact:"") | (empty() & ~merges()))'
 'closest_bookmark(to)' = 'heads(::to & bookmarks())'

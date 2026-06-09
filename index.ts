@@ -38,6 +38,43 @@ import { PROD_JJ_CONFIG } from "./lib/config";
 
 const jjconf = PROD_JJ_CONFIG;
 
+let _bookmarkPrefix: string | undefined;
+// Resolved bookmark prefix for newly-created bookmarks. Prefers the
+// `jj-pr.bookmark-prefix` config key (layered from the user's jj config),
+// falling back to `<user>/jj/` derived from `user.email`.
+async function getBookmarkPrefix(): Promise<string> {
+  if (_bookmarkPrefix !== undefined) return _bookmarkPrefix;
+
+  const configured = await exec(
+    `jj --config-file ${jjconf} config get jj-pr.bookmark-prefix`,
+  )
+    .then(mapToStdout)
+    .then((s) => s.trim())
+    .catch(() => ""); // key unset -> jj exits non-zero
+
+  let prefix = configured;
+  if (!prefix) {
+    const email = await exec(
+      `jj --config-file ${jjconf} config get user.email`,
+    )
+      .then(mapToStdout)
+      .then((s) => s.trim())
+      .catch(() => "");
+    const user = email.split("@")[0];
+    if (!user) {
+      throw new Error(
+        "Cannot determine a bookmark prefix: set `jj-pr.bookmark-prefix` " +
+          "or `user.email` in your jj config.",
+      );
+    }
+    prefix = `${user}/jj/`;
+  }
+
+  // Normalize so both "ta/jj" and "ta/jj/" work.
+  _bookmarkPrefix = prefix.endsWith("/") ? prefix : `${prefix}/`;
+  return _bookmarkPrefix;
+}
+
 const PR_STACK_SECTION_PATTERN =
   /(?:^|\n)(?:<!-- GENERATED_PR_STACK -->\n)?## PR Stack\n(?:- .+(?:\n|$))+/m;
 
@@ -254,6 +291,7 @@ async function approveAndPushNewBookmarks(
   bookmarksAndPRs: BookmarkResult[],
   approvedNewBookmarks: Set<string>,
 ) {
+  const bookmarkPrefix = await getBookmarkPrefix();
   const changesNeedingBookmarks = await Promise.all(
     bookmarksAndPRs
       .filter((change) => !change.headBookmark)
@@ -266,7 +304,7 @@ async function approveAndPushNewBookmarks(
         return {
           change,
           ...item,
-          headBookmark: `ta/jj/${sanitizeBookmarkDescription(changeitem.description, changeitem.change_id)}`,
+          headBookmark: `${bookmarkPrefix}${sanitizeBookmarkDescription(changeitem.description, changeitem.change_id)}`,
           new: true,
         };
       }),
