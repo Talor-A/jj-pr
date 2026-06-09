@@ -552,9 +552,9 @@ export async function main(spinner: Ora, args: CliArgs) {
   const trunk = await ensureTrunk();
   const gitDir = await absoluteGitDir();
 
-  if (!args.dryRun) {
-    await doFetch(spinner);
+  await doFetch(spinner);
 
+  if (args.rebase) {
     await doRebase(spinner, args.dryRun, gitDir);
   }
 

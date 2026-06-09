@@ -5,6 +5,7 @@ const CliSchema = z.object({
   revision: z.string().default("closest_pushable(@)"),
   dryRun: z.boolean().default(false),
   help: z.boolean().default(false),
+  rebase: z.boolean().default(false),
 });
 
 export type CliArgs = z.infer<typeof CliSchema>;
@@ -21,6 +22,7 @@ Arguments:
 Options:
   -r, --revision <rev>  Revision to process (alternative to positional)
       --dry-run         Preview changes without applying them
+      --rebase          [experimental] Rebase the stack before pushing
   -h, --help            Show this help message
 
 Commands:
@@ -35,6 +37,7 @@ export function parseCli(argv: string[]) {
       "dry-run": { type: "boolean" },
       help: { type: "boolean", short: "h" },
       revision: { type: "string", short: "r" },
+      rebase: { type: "boolean" },
     },
     allowPositionals: true,
   });
@@ -47,5 +50,6 @@ export function parseCli(argv: string[]) {
     revision: positionals[0] ?? values.revision,
     dryRun: values["dry-run"],
     help: values.help,
+    rebase: values.rebase,
   });
 }
