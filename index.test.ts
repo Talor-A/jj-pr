@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { bookmarkHead, bookmarkHeadsForChange } from "./index";
+import { bookmarkHead, bookmarkHeadsForChange, bodyWithoutPrStack } from "./index";
 import { closestBookmarkBeforeChangeRevset } from "./lib/pr-stack";
 import { constructRevset, DEFAULT_LOG_REVSET } from "./lib/revset";
 import { exec } from "./lib/exec";
@@ -192,6 +192,34 @@ async function logRevset(repo: string, revset: string): Promise<string> {
     .cwd(repo)
     .text();
 }
+
+describe("bodyWithoutPrStack", () => {
+  const stack = "## PR Stack\n- https://github.com/x/y/pull/1\n- `main`\n";
+
+  test("strips stack when list immediately follows heading", () => {
+    expect(bodyWithoutPrStack(`description\n\n${stack}`)).toBe(
+      "description\n\n",
+    );
+  });
+
+  test("strips stack when there is a blank line after the heading", () => {
+    const stackWithBlankLine =
+      "## PR Stack\n\n- https://github.com/x/y/pull/1\n- `main`\n";
+    expect(bodyWithoutPrStack(`description\n\n${stackWithBlankLine}`)).toBe(
+      "description\n\n",
+    );
+  });
+
+  test("returns empty string when body is only the stack", () => {
+    expect(bodyWithoutPrStack(stack)).toBe("");
+  });
+
+  test("returns body unchanged when there is no stack", () => {
+    expect(bodyWithoutPrStack("just a description")).toBe(
+      "just a description\n\n",
+    );
+  });
+});
 
 describe("bookmarkHead", () => {
   test("returns the bookmark unchanged when it has no remote", () => {

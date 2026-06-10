@@ -74,7 +74,7 @@ async function getBookmarkPrefix(): Promise<string> {
 }
 
 const PR_STACK_SECTION_PATTERN =
-  /(?:^|\n)(?:<!-- GENERATED_PR_STACK -->\n)?## PR Stack\n(?:- .+(?:\n|$))+/m;
+  /(?:^|\n)(?:<!-- GENERATED_PR_STACK -->\n)?## PR Stack\n\n?(?:- .+(?:\n|$))+/m;
 
 async function confirm(
   message: string = "proceed? (y/n)",
@@ -96,7 +96,7 @@ function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
 
-function bodyWithoutPrStack(body: string): string {
+export function bodyWithoutPrStack(body: string): string {
   const stripped = body.replace(PR_STACK_SECTION_PATTERN, "").trimEnd();
 
   return stripped.length > 0 ? `${stripped}\n\n` : "";
