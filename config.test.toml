@@ -1,6 +1,6 @@
 [user]
-name = "jj-ts tests"
-email = "jj-ts-tests@example.com"
+name = "jj-pr tests"
+email = "jj-pr-tests@example.com"
 
 [jj-pr]
 bookmark-prefix = "test/jj/"

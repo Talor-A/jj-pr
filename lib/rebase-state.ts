@@ -18,7 +18,7 @@ const RebaseStateSchema = z.object({
 export type RebaseState = z.infer<typeof RebaseStateSchema>;
 
 export function rebaseStatePath(gitDir: string): string {
-  return join(gitDir, "jj-ts-state.json");
+  return join(gitDir, "jj-pr-state.json");
 }
 
 export async function absoluteGitDir(): Promise<string> {

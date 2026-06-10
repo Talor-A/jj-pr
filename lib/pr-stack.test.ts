@@ -22,7 +22,7 @@ describe("jjLogBookmarksCommand", () => {
   test("regression: shell-quotes revsets with parentheses", () => {
     const change = "mykpnrqwkvyxuzqqntuulzxwsrvxlkxm";
     const cmd = jjLogBookmarksCommand(
-      "/Users/ta/.dotfiles/projects/jj-ts/config.toml",
+      "/path/to/config.toml",
       closestBookmarkBeforeChangeRevset(change),
     );
 

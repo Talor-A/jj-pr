@@ -24,7 +24,7 @@ const pathToFakeGh = join(import.meta.dirname, "test/fixtures/fake-gh.ts");
 const jjconf = TEST_JJ_CONFIG;
 
 async function makeTempDir(): Promise<string> {
-  const dir = await realpath(await mkdtemp(join(tmpdir(), "jj-ts-test-")));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "jj-pr-test-")));
   return dir;
 }
 
