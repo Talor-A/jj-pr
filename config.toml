@@ -4,4 +4,6 @@
 'closest_pushable(to)' = 'heads(::to & mutable() & ~description(exact:"") & (~empty() | merges()) & ~(unpushable(to)::))'
 # this revset returns the heads of bookmarks that are in the stack,
 # excluding those that are not pushable.
-'bookmark_heads_in_stack(rev)' = 'trunk()..((trunk()..rev)::) & (bookmarks() | remote_bookmarks()) & ~(((trunk()..((trunk()..rev)::)) & mutable() & (description(exact:"") | (empty() & ~merges())))::)'
+# ~hidden() drops abandoned commits that a stale remote bookmark still pins
+# into the revset; their change IDs are unresolvable by `jj log -r <change_id>`.
+'bookmark_heads_in_stack(rev)' = 'trunk()..((trunk()..rev)::) & (bookmarks() | remote_bookmarks()) & ~hidden() & ~(((trunk()..((trunk()..rev)::)) & mutable() & (description(exact:"") | (empty() & ~merges())))::)'

@@ -185,6 +185,29 @@ async function setupFakeGh(
   return { binDir, statePath };
 }
 
+/**
+ * Builds a stack of two pushed changes on top of main, then abandons the top
+ * one. Abandoning deletes the local bookmark but leaves
+ * test/jj/generate-api-types@origin pointing at the now-hidden commit.
+ */
+async function setupAbandonedPushedChange(repo: string): Promise<void> {
+  const jj = new JJ(repo);
+
+  await writeFile(join(repo, "stream-flag.txt"), "stream\n");
+  await jj.describe("@", "add stream flag");
+  await jj.bookmark_create("@", "test/jj/add-stream-flag");
+  await jj.git_push_bookmark("test/jj/add-stream-flag");
+
+  await jj.new();
+  await writeFile(join(repo, "api-types.txt"), "api types\n");
+  await jj.describe("@", "generate api types");
+  await jj.bookmark_create("@", "test/jj/generate-api-types");
+  await jj.git_push_bookmark("test/jj/generate-api-types");
+
+  await jj.new();
+  await jj.exec("abandon test/jj/generate-api-types");
+}
+
 const logTemplate =
   'description.first_line() ++ " |>" ++ separate(",", local_bookmarks.map(|b| b.name()).join(", "), remote_bookmarks.map(|b| b.name() ++ "@" ++ b.remote()).join(",")) ++ "\n"';
 async function logRevset(repo: string, revset: string): Promise<string> {
@@ -441,6 +464,22 @@ describe("constructRevset", () => {
     "
   `);
   });
+  test("regression: excludes an abandoned change whose bookmark still exists on the remote", async () => {
+    const { repo } = await setupTempJjRepo();
+    await setupMainBranch(repo);
+    await setupAbandonedPushedChange(repo);
+
+    // the hidden abandoned commit is still pinned into the revset by
+    // test/jj/generate-api-types@origin; its change ID is unresolvable by
+    // later `jj log -r <change_id>` calls, so it must not be included here.
+    expect(
+      await logRevset(repo, `(${constructRevset("closest_pushable(@)")}) & mutable()`),
+    ).toMatchInlineSnapshot(`
+    "add stream flag |>test/jj/add-stream-flag,test/jj/add-stream-flag@git,test/jj/add-stream-flag@origin
+    "
+  `);
+  });
+
   test("both sides of a merge are included", async () => {
     const { repo } = await setupTempJjRepo();
     const jj = new JJ(repo);
@@ -608,6 +647,31 @@ describe("main", () => {
         body: "## PR Stack\n- https://github.com/example/repo/pull/2\n- `main`\n",
       },
     ]);
+  }, 15000);
+
+  test("regression: dry run succeeds after abandoning a change whose bookmark was pushed", async () => {
+    const { repo } = await setupTempJjRepo();
+    await setupMainBranch(repo);
+    await setupAbandonedPushedChange(repo);
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain(
+      "create these PRs:\ntest/jj/add-stream-flag -> main",
+    );
   }, 15000);
 
   test("exits cleanly if no stack", async () => {
