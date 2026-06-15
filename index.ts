@@ -77,7 +77,7 @@ const PR_STACK_SECTION_PATTERN =
   /(?:^|\n)(?:<!-- GENERATED_PR_STACK -->\n)?## PR Stack\n\n?(?:- .+(?:\n|$))+/m;
 
 async function confirm(
-  message: string = "proceed? (y/n)",
+  message: string = "proceed? (⏎ / n)",
   /** @default true */
   acceptEmpty: boolean = true,
 ): Promise<boolean> {
@@ -639,7 +639,7 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   spinner.stop();
 
-  const shouldProceed = args.dryRun || (await confirm("update PRs?"));
+  const shouldProceed = args.dryRun || (await confirm("update PRs? (⏎ / n)"));
 
   if (!shouldProceed) {
     spinner.stopAndPersist();
