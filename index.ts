@@ -223,17 +223,23 @@ async function handlePush(spinner: Ora, revset: string, dryRun: boolean) {
 }
 
 async function ensureTrunk(): Promise<string> {
-  const trunk = (
-    await exec(
-      `jj --config-file ${jjconf} bookmark list -r 'trunk()' -T 'name ++ "\n"'`,
-    ).then(mapToStdout)
-  ).trim();
-
-  if (!trunk) {
+  const trunk = await exec(
+    `jj --config-file ${jjconf} bookmark list -r 'trunk()' -T 'name ++ "\n"'`,
+  )
+    .then(mapToStdout)
+    .then((x) => x.trim())
+    .then(lines);
+  if (!trunk[0]) {
     throw new Error("Unable to find trunk bookmark");
   }
 
-  return trunk;
+  if (trunk.includes("main")) {
+    return "main";
+  }
+  if (trunk.includes("master")) {
+    return "master";
+  }
+  return trunk[0];
 }
 
 async function handleFix(spinner: Ora, revset: string, dryRun: boolean) {
