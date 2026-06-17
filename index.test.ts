@@ -45,6 +45,13 @@ async function setupTempJjRepo(): Promise<{
   await $`git init --bare ${origin}`.quiet();
   await $`jj --config-file ${jjconf} git clone ${origin} ${repo}`.quiet();
 
+  // The spawned index.ts uses PROD_JJ_CONFIG, which has no bookmark-prefix.
+  // Pin it at the repo level so prefix resolution never falls back to the
+  // machine-global `user.email` (absent in CI, which made tests fail there).
+  await $`jj --config-file ${jjconf} config set --repo jj-pr.bookmark-prefix test/jj/`
+    .cwd(repo)
+    .quiet();
+
   cleanups.push(() => rm(root, { force: true, recursive: true }));
 
   return {
@@ -571,9 +578,6 @@ describe("main", () => {
     const { origin, repo } = await setupTempJjRepo();
     const jj = new JJ(repo);
     await setupMainBranch(repo);
-    await $`jj --config-file ${jjconf} config set --repo jj-pr.bookmark-prefix test/jj/`
-      .cwd(repo)
-      .quiet();
     await createGitBranchWithDifferentCommitter(origin, "theirs");
     await jj.git_fetch();
     await $`jj --config-file ${jjconf} bookmark track theirs --remote=origin`
