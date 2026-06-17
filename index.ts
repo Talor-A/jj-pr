@@ -289,23 +289,27 @@ async function approveAndPushNewBookmarks(
   bookmarksAndPRs: BookmarkResult[],
   approvedNewBookmarks: Set<string>,
 ) {
-  const bookmarkPrefix = await getBookmarkPrefix();
+  const changesWithoutBookmarks = bookmarksAndPRs.filter(
+    (change) => !change.headBookmark,
+  );
+  // Resolve the prefix lazily: when every change already has a bookmark we
+  // don't create any, so we must not require a bookmark prefix to be set.
+  const bookmarkPrefix =
+    changesWithoutBookmarks.length > 0 ? await getBookmarkPrefix() : "";
   const changesNeedingBookmarks = await Promise.all(
-    bookmarksAndPRs
-      .filter((change) => !change.headBookmark)
-      .map(async ({ change, ...item }) => {
-        const changeitem = await execToSchema(
-          JJLogItemJsonSchema,
-          `jj --config-file ${jjconf} log -r ${shellQuote(change)} --no-graph -T 'json(self)'`,
-        );
+    changesWithoutBookmarks.map(async ({ change, ...item }) => {
+      const changeitem = await execToSchema(
+        JJLogItemJsonSchema,
+        `jj --config-file ${jjconf} log -r ${shellQuote(change)} --no-graph -T 'json(self)'`,
+      );
 
-        return {
-          change,
-          ...item,
-          headBookmark: `${bookmarkPrefix}${sanitizeBookmarkDescription(changeitem.description, changeitem.change_id)}`,
-          new: true,
-        };
-      }),
+      return {
+        change,
+        ...item,
+        headBookmark: `${bookmarkPrefix}${sanitizeBookmarkDescription(changeitem.description, changeitem.change_id)}`,
+        new: true,
+      };
+    }),
   );
   const newBookmarks = changesNeedingBookmarks
     .filter((bookmark) => bookmark.new)
