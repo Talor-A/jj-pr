@@ -7,6 +7,6 @@ bookmark-prefix = "test/jj/"
 
 [revset-aliases]
 'unpushable(to)' = '::to & mutable() & (description(exact:"") | (empty() & ~merges()))'
-'closest_bookmark(to)' = 'heads(::to & bookmarks())'
+'closest_bookmark(to)' = 'heads(trunk()..to & bookmarks())'
 'closest_pushable(to)' = 'heads(::to & mutable() & ~description(exact:"") & (~empty() | merges()) & ~(unpushable(to)::))'
 'bookmark_heads_in_stack(rev)' = 'trunk()..((trunk()..rev)::) & (bookmarks() | remote_bookmarks()) & ~hidden() & ~(((trunk()..((trunk()..rev)::)) & mutable() & (description(exact:"") | (empty() & ~merges())))::)'

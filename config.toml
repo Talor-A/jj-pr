@@ -1,6 +1,6 @@
 [revset-aliases]
 'unpushable(to)' = '::to & mutable() & (description(exact:"") | (empty() & ~merges()))'
-'closest_bookmark(to)' = 'heads(::to & bookmarks())'
+'closest_bookmark(to)' = 'heads(trunk()..to & bookmarks())'
 'closest_pushable(to)' = 'heads(::to & mutable() & ~description(exact:"") & (~empty() | merges()) & ~(unpushable(to)::))'
 # this revset returns the heads of bookmarks that are in the stack,
 # excluding those that are not pushable.

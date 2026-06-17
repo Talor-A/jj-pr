@@ -157,6 +157,21 @@ async function setupMainBranch(repo: string) {
   await $`jj --config-file ${jjconf} git push`.cwd(repo).quiet();
 }
 
+async function setupMasterBranch(repo: string) {
+  await $`touch hello.txt`.cwd(repo);
+  const jj = new JJ(repo);
+
+  await $`jj --config-file ${jjconf} desc -m "add hello.txt"`
+    .cwd(repo)
+    .quiet();
+  await jj.bookmark_create("@", "master").quiet();
+  await $`jj --config-file ${jjconf} bookmark track master --remote=origin`
+    .cwd(repo)
+    .quiet();
+  await jj.new().quiet();
+  await $`jj --config-file ${jjconf} git push`.cwd(repo).quiet();
+}
+
 async function createGitBranchWithDifferentCommitter(
   origin: string,
   bookmark: string,
@@ -653,6 +668,45 @@ describe("main", () => {
     ]);
   }, 15000);
 
+  test("regression: bases a sibling of current main on main", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await jj.new("main");
+    await writeFile(join(repo, "def234.txt"), "DEF234\n");
+    await jj.describe("@", "DEF234");
+    await $`jj --config-file ${jjconf} bookmark move main --to @`
+      .cwd(repo)
+      .quiet();
+    await jj.git_push_bookmark("main");
+
+    await jj.new("main-");
+    await writeFile(join(repo, "efg345.txt"), "EFG345\n");
+    await jj.describe("@", "klmnop");
+    await jj.bookmark_create("@", "test/jj/klmnop");
+    await jj.git_push_bookmark("test/jj/klmnop");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("create these PRs:\ntest/jj/klmnop -> main");
+    expect(stdout).toContain("## PR Stack\n- `main`");
+  }, 15000);
+
   test("regression: dry run succeeds after abandoning a change whose bookmark was pushed", async () => {
     const { repo } = await setupTempJjRepo();
     await setupMainBranch(repo);
@@ -676,6 +730,105 @@ describe("main", () => {
     expect(stdout).toContain(
       "create these PRs:\ntest/jj/add-stream-flag -> main",
     );
+  }, 15000);
+
+  test("regression: bases a feature on master when another PR bookmark also points at trunk", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMasterBranch(repo);
+
+    await jj.bookmark_create("master", "cursor/0f2f3935");
+    await jj.new("master");
+    await writeFile(join(repo, "feature.txt"), "feature\n");
+    await jj.describe("@", "feature");
+    await jj.bookmark_create("@", "test/jj/feature");
+    await jj.git_push_bookmark("test/jj/feature");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 2,
+      prs: [
+        {
+          number: 1,
+          head: "cursor/0f2f3935",
+          title: "old cursor branch",
+          baseRefName: "master",
+          body: "old cursor body",
+        },
+      ],
+    });
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("create these PRs:\ntest/jj/feature -> master");
+    expect(stdout).toContain("## PR Stack\n- `master`");
+    expect(stdout).not.toContain("cursor/0f2f3935\nmaster");
+  }, 15000);
+
+  test("regression: bases a feature on master when another PR bookmark is an ancestor of master", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMasterBranch(repo);
+
+    await writeFile(join(repo, "old-cursor-branch.txt"), "old cursor branch\n");
+    await jj.describe("@", "old cursor branch");
+    await jj.bookmark_create("@", "cursor/0f2f3935");
+    await jj.git_push_bookmark("cursor/0f2f3935");
+
+    await jj.new("cursor/0f2f3935");
+    await writeFile(join(repo, "advance-master.txt"), "advance master\n");
+    await jj.describe("@", "advance master");
+    await $`jj --config-file ${jjconf} bookmark move master --to @`
+      .cwd(repo)
+      .quiet();
+    await jj.git_push_bookmark("master");
+
+    await jj.new("cursor/0f2f3935");
+    await writeFile(join(repo, "feature.txt"), "feature\n");
+    await jj.describe("@", "feature");
+    await jj.bookmark_create("@", "test/jj/feature");
+    await jj.git_push_bookmark("test/jj/feature");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 2,
+      prs: [
+        {
+          number: 1,
+          head: "cursor/0f2f3935",
+          title: "old cursor branch",
+          baseRefName: "master",
+          body: "old cursor body",
+        },
+      ],
+    });
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("create these PRs:\ntest/jj/feature -> master");
+    expect(stdout).toContain("## PR Stack\n- `master`");
   }, 15000);
 
   test("exits cleanly if no stack", async () => {
