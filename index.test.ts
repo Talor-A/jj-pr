@@ -668,6 +668,52 @@ describe("main", () => {
     ]);
   }, 15000);
 
+  test("regression: approving a new bookmark also approves creating its PR", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "feature.txt"), "feature\n");
+    await jj.describe("@", "feature");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+    const proc = Bun.spawn(["sh", "-c", 'yes "" | "$BUN_EXE" "$JJ_PR_INDEX"'], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        BUN_EXE: bun,
+        FAKE_GH_STATE: statePath,
+        JJ_PR_INDEX: pathToIndexFile,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/feature");
+    expect(stdout).toContain("create these PRs:\ntest/jj/feature -> main");
+    expect(stdout).not.toContain("update PRs?");
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([
+      {
+        number: 1,
+        head: "test/jj/feature",
+        title: "test/jj/feature",
+        baseRefName: "main",
+        body: "## PR Stack\n- https://github.com/example/repo/pull/1\n- `main`\n",
+      },
+    ]);
+  }, 15000);
+
   test("regression: bases a sibling of current main on main", async () => {
     const { repo } = await setupTempJjRepo();
     const jj = new JJ(repo);
