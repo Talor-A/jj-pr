@@ -645,7 +645,17 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   spinner.stop();
 
-  const shouldProceed = args.dryRun || (await confirm("update PRs? (⏎ / n)"));
+  const prChangesAlreadyApproved = plans.every((plan) => {
+    if (plan.action === "noop") return true;
+    if (plan.action === "create") {
+      return approvedNewBookmarks.has(plan.headBookmark);
+    }
+    return false;
+  });
+  const shouldProceed =
+    args.dryRun ||
+    prChangesAlreadyApproved ||
+    (await confirm("update PRs? (⏎ / n)"));
 
   if (!shouldProceed) {
     spinner.stopAndPersist();
