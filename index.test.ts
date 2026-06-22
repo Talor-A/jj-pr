@@ -750,7 +750,7 @@ describe("main", () => {
     const stderr = result.stderr.toString();
     expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
     expect(stdout).toContain("create these PRs:\ntest/jj/klmnop -> main");
-    expect(stdout).toContain("## PR Stack\n- `main`");
+    expect(stdout).toContain("## PR Stack\n- [new PR] test/jj/klmnop\n- `main`");
   }, 15000);
 
   test("regression: dry run succeeds after abandoning a change whose bookmark was pushed", async () => {
@@ -775,6 +775,9 @@ describe("main", () => {
     expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
     expect(stdout).toContain(
       "create these PRs:\ntest/jj/add-stream-flag -> main",
+    );
+    expect(stdout).toContain(
+      "## PR Stack\n- [new PR] test/jj/add-stream-flag\n- `main`",
     );
   }, 15000);
 
@@ -818,7 +821,7 @@ describe("main", () => {
     const stderr = result.stderr.toString();
     expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
     expect(stdout).toContain("create these PRs:\ntest/jj/feature -> master");
-    expect(stdout).toContain("## PR Stack\n- `master`");
+    expect(stdout).toContain("## PR Stack\n- [new PR] test/jj/feature\n- `master`");
     expect(stdout).not.toContain("cursor/0f2f3935\nmaster");
   }, 15000);
 
@@ -874,7 +877,7 @@ describe("main", () => {
     const stderr = result.stderr.toString();
     expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
     expect(stdout).toContain("create these PRs:\ntest/jj/feature -> master");
-    expect(stdout).toContain("## PR Stack\n- `master`");
+    expect(stdout).toContain("## PR Stack\n- [new PR] test/jj/feature\n- `master`");
   }, 15000);
 
   test("dry run plans PRs for unbookmarked changes without mutating GitHub", async () => {
@@ -903,6 +906,7 @@ describe("main", () => {
     expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
     expect(stdout).toContain("New bookmarks:\ntest/jj/feature");
     expect(stdout).toContain("create these PRs:\ntest/jj/feature -> main");
+    expect(stdout).toContain("## PR Stack\n- [new PR] test/jj/feature\n- `main`");
 
     const ghState = JSON.parse(await readFile(statePath, "utf8"));
     expect(ghState.prs).toEqual([]);
@@ -952,6 +956,9 @@ describe("main", () => {
     expect(stdout).toContain("New bookmarks:\ntest/jj/middle");
     expect(stdout).toContain("test/jj/middle -> main");
     expect(stdout).toContain("test/jj/top -> test/jj/middle");
+    expect(stdout).toContain(
+      "## PR Stack\n- [new PR] test/jj/top\n- [new PR] test/jj/middle\n- `main`",
+    );
 
     const ghState = JSON.parse(await readFile(statePath, "utf8"));
     expect(ghState.prs).toEqual([]);
