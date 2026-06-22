@@ -964,6 +964,56 @@ describe("main", () => {
     expect(ghState.prs).toEqual([]);
   }, 15000);
 
+  test("dry run preserves every explicitly selected revision in a compound revset", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "parent.txt"), "parent\n");
+    await jj.describe("@", "parent");
+    const parentChange = (
+      await $`jj --config-file ${jjconf} log -r @ --no-graph -T 'change_id ++ "\n"'`
+        .cwd(repo)
+        .text()
+    ).trim();
+
+    await jj.new();
+    await writeFile(join(repo, "child.txt"), "child\n");
+    await jj.describe("@", "child");
+    const childChange = (
+      await $`jj --config-file ${jjconf} log -r @ --no-graph -T 'change_id ++ "\n"'`
+        .cwd(repo)
+        .text()
+    ).trim();
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result =
+      await $`${bun} ${pathToIndexFile} --dry-run -r ${`${parentChange}|${childChange}`}`
+        .cwd(repo)
+        .env({
+          ...process.env,
+          FAKE_GH_STATE: statePath,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        })
+        .nothrow()
+        .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/parent\ntest/jj/child");
+    expect(stdout).toContain("test/jj/parent -> main");
+    expect(stdout).toContain("test/jj/child -> test/jj/parent");
+    expect(stdout).toContain(
+      "## PR Stack\n- [new PR] test/jj/child\n- [new PR] test/jj/parent\n- `main`",
+    );
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([]);
+  }, 15000);
+
   test("exits cleanly if no stack", async () => {
     const { repo } = await setupTempJjRepo();
     await setupMainBranch(repo);

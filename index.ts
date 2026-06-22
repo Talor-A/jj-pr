@@ -742,6 +742,20 @@ async function doRebase(spinner: Ora, dryRun: boolean, gitDir: string) {
   }
 }
 
+async function constructRevsetForRevision(revision: string): Promise<string> {
+  const revisions = await exec(
+    `jj --config-file ${jjconf} log --no-graph --reversed -r ${shellQuote(revision)} -T 'change_id ++ "\n"'`,
+  )
+    .then(mapToStdout)
+    .then(lines);
+
+  if (revisions.length === 0) {
+    return "";
+  }
+
+  return revisions.map(constructRevset).join(" | ");
+}
+
 export async function main(spinner: Ora, args: CliArgs) {
   const trunk = await ensureTrunk();
   const gitDir = await absoluteGitDir();
@@ -752,7 +766,12 @@ export async function main(spinner: Ora, args: CliArgs) {
     await doRebase(spinner, args.dryRun, gitDir);
   }
 
-  const revset = constructRevset(args.revision);
+  const revset = await constructRevsetForRevision(args.revision);
+  if (!revset) {
+    spinner.text = "nothing to do.";
+    spinner.stopAndPersist();
+    process.exit(0);
+  }
 
   await handleFix(spinner, revset, args.dryRun);
 
