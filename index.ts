@@ -743,11 +743,21 @@ async function doRebase(spinner: Ora, dryRun: boolean, gitDir: string) {
 }
 
 async function constructRevsetForRevision(revision: string): Promise<string> {
-  const revisions = await exec(
-    `jj --config-file ${jjconf} log --no-graph --reversed -r ${shellQuote(revision)} -T 'change_id ++ "\n"'`,
-  )
-    .then(mapToStdout)
-    .then(lines);
+  let revisions: string[];
+  try {
+    revisions = await exec(
+      `jj --config-file ${jjconf} log --no-graph --reversed -r ${shellQuote(revision)} -T 'change_id ++ "\n"'`,
+    )
+      .then(mapToStdout)
+      .then(lines);
+  } catch (error) {
+    const stderr =
+      error instanceof Error && "stderr" in error
+        ? String(error.stderr).trim()
+        : "";
+    const message = stderr || (error as Error).message;
+    throw new Error(`Invalid revision ${shellQuote(revision)}:\n${message}`);
+  }
 
   if (revisions.length === 0) {
     return "";
@@ -918,6 +928,10 @@ if (import.meta.main) {
     }
 
     await main(spinner, args);
+  } catch (error) {
+    spinner.stop();
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
   } finally {
     spinner.stop();
   }

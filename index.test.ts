@@ -1014,6 +1014,54 @@ describe("main", () => {
     expect(ghState.prs).toEqual([]);
   }, 15000);
 
+  test("formats invalid revision errors without a Node stack trace", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    const changesByPrefix = new Map<string, string[]>();
+    let ambiguousPrefix: string | undefined;
+    for (let i = 0; i < 40 && ambiguousPrefix === undefined; i += 1) {
+      const description = `ambiguous ${i}`;
+      await writeFile(join(repo, `${description}.txt`), `${description}\n`);
+      await jj.describe("@", description);
+      const change = (
+        await $`jj --config-file ${jjconf} log -r @ --no-graph -T 'change_id ++ "\n"'`
+          .cwd(repo)
+          .text()
+      ).trim();
+      const prefix = change[0]!;
+      const changes = changesByPrefix.get(prefix) ?? [];
+      changes.push(change);
+      changesByPrefix.set(prefix, changes);
+      if (changes.length > 1) {
+        ambiguousPrefix = prefix;
+      }
+      await jj.new();
+    }
+
+    expect(ambiguousPrefix).toBeDefined();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run -r ${ambiguousPrefix!}`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stderr = result.stderr.toString();
+    expect(result.exitCode).toBe(1);
+    expect(stderr).toContain(`Invalid revision '${ambiguousPrefix!}'`);
+    expect(stderr).toContain("ambiguous");
+    expect(stderr).not.toContain("node:internal");
+    expect(stderr).not.toContain("at ");
+  }, 15000);
+
   test("exits cleanly if no stack", async () => {
     const { repo } = await setupTempJjRepo();
     await setupMainBranch(repo);
