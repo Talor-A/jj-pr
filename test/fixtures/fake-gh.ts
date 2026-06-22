@@ -12,6 +12,7 @@ interface FakePullRequest {
 interface FakeGhState {
   nextNumber: number;
   prs: FakePullRequest[];
+  commands?: string[][];
 }
 
 function getOption(args: string[], option: string): string {
@@ -39,6 +40,9 @@ const state = JSON.parse(await Bun.file(statePath).text()) as FakeGhState;
 const save = async () => {
   await Bun.write(statePath, JSON.stringify(state));
 };
+state.commands ??= [];
+state.commands.push(args);
+await save();
 
 if (args[0] === "repo" && args[1] === "view") {
   console.log(JSON.stringify({ nameWithOwner: "example/repo" }));
