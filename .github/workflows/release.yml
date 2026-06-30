@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          release-type: node
+          package-name: jj-pr
+
+      - uses: actions/checkout@v4
+        if: ${{ steps.release.outputs.release_created }}
+
+      - uses: oven-sh/setup-bun@v2
+        if: ${{ steps.release.outputs.release_created }}
+
+      - name: Install jj
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view --repo jj-vcs/jj --json tagName -q .tagName)
+          mkdir -p "$HOME/.local/bin"
+          gh release download "$tag" --repo jj-vcs/jj \
+            --pattern "jj-${tag}-x86_64-unknown-linux-musl.tar.gz" \
+            --output - | tar xz -C "$HOME/.local/bin" ./jj
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - run: bun install --frozen-lockfile
+        if: ${{ steps.release.outputs.release_created }}
+
+      - run: bun run typecheck
+        if: ${{ steps.release.outputs.release_created }}
+
+      - run: bun run test
+        if: ${{ steps.release.outputs.release_created }}
+
+      - run: bun publish --access public
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
