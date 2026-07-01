@@ -794,14 +794,14 @@ describe("main", () => {
         head: "test/jj/base-feature",
         title: "base feature",
         baseRefName: "main",
-        body: stackBody,
+        body: `base body\n\n${stackBody}`,
       },
       {
         number: 2,
         head: "test/jj/middle-feature",
         title: "middle feature",
         baseRefName: "test/jj/base-feature",
-        body: stackBody,
+        body: `middle body\n\n${stackBody}`,
       },
       {
         number: 3,

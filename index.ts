@@ -26,6 +26,7 @@ import { absoluteGitDir, loadRebaseState } from "./lib/rebase-state";
 import {
   closestBookmarkBeforeChangeRevset,
   jjLogBookmarksCommand,
+  mergeBookmarkResults,
 } from "./lib/pr-stack";
 import {
   JJLogItemJsonSchema,
@@ -115,6 +116,16 @@ export async function bookmarkHeadsForChange(
   );
 
   return unique(bookmarks.map(bookmarkHead));
+}
+
+async function localBookmarkHeadsForChange(change: string): Promise<string[]> {
+  return unique(
+    lines(
+      await exec(
+        `jj --config-file ${jjconf} log -r ${shellQuote(change)} --no-graph -T 'local_bookmarks.map(|b| b.name()).join("\\n") ++ "\\n"'`,
+      ).then(mapToStdout),
+    ),
+  );
 }
 
 const prsByHead = new Map<string, PullRequest>();
@@ -349,14 +360,25 @@ async function approveAndPushNewBookmarks(
       }),
   );
 
-  return changesNeedingBookmarks as (
-    | { headBookmark: string; existingPr: PullRequest; change: string }
-    | {
-        headBookmark: string;
-        existingPr: undefined;
-        change: string;
+  const locallyBookmarked = await Promise.all(
+    bookmarksAndPRs.map(async (item): Promise<BookmarkResult> => {
+      if (!item.headBookmark) return item;
+      const localHeads = await localBookmarkHeadsForChange(item.change);
+      if (
+        localHeads.includes(item.headBookmark) &&
+        item.headBookmark.startsWith(bookmarkPrefix)
+      ) {
+        return item;
       }
-  )[];
+      return {
+        change: item.change,
+        headBookmark: undefined,
+        existingPr: undefined,
+      };
+    }),
+  );
+
+  return mergeBookmarkResults(locallyBookmarked, changesNeedingBookmarks);
 }
 interface PRPlanCreate {
   action: "create";
