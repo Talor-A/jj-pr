@@ -8,6 +8,7 @@ describe("parseCli", () => {
       dryRun: false,
       rebase: false,
       help: false,
+      version: false,
     });
   });
 
@@ -17,6 +18,7 @@ describe("parseCli", () => {
       dryRun: false,
       rebase: false,
       help: false,
+      version: false,
     });
   });
 
@@ -26,6 +28,7 @@ describe("parseCli", () => {
       dryRun: false,
       rebase: false,
       help: false,
+      version: false,
     });
   });
   test("accepts -r flag", () => {
@@ -34,6 +37,7 @@ describe("parseCli", () => {
       dryRun: false,
       rebase: false,
       help: false,
+      version: false,
     });
   });
 
@@ -59,6 +63,14 @@ describe("parseCli", () => {
 
   test("parses -h", () => {
     expect(parseCli(["-h"]).help).toBe(true);
+  });
+
+  test("parses --version", () => {
+    expect(parseCli(["--version"]).version).toBe(true);
+  });
+
+  test("parses -v", () => {
+    expect(parseCli(["-v"]).version).toBe(true);
   });
 
   test("help matches snapshot", () => {

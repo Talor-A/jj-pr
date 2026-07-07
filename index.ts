@@ -39,6 +39,7 @@ import {
   type PullRequest,
 } from "./lib/schema";
 import { PROD_JJ_CONFIG } from "./lib/config";
+import pkg from "./package.json";
 
 const jjconf = PROD_JJ_CONFIG;
 
@@ -931,6 +932,12 @@ if (import.meta.main) {
   const spinner = ora("").start();
   try {
     const args = parseCli(rawArgs);
+
+    if (args.version) {
+      spinner.stop();
+      console.log(pkg.version);
+      process.exit(0);
+    }
 
     if (args.help) {
       spinner.stop();

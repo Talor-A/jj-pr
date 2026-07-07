@@ -6,7 +6,7 @@ export function isShell(value: string): value is Shell {
 }
 
 /** Long flags jj-pr accepts, completed as bare words. */
-const FLAGS = ["--revision", "--dry-run", "--help"];
+const FLAGS = ["--revision", "--dry-run", "--help", "--version"];
 
 function bashCompletion(): string {
   const flags = FLAGS.join(" ");
@@ -30,7 +30,8 @@ _jj-pr() {
   _arguments \\
     '(-r --revision)'{-r,--revision}'[Revision to process]:revset:' \\
     '--dry-run[Preview changes without applying them]' \\
-    '(-h --help)'{-h,--help}'[Show help message]'
+    '(-h --help)'{-h,--help}'[Show help message]' \\
+    '(-v --version)'{-v,--version}'[Show version number]'
 }
 _jj-pr "$@"
 `;
@@ -42,6 +43,7 @@ function fishCompletion(): string {
 complete -c jj-pr -s r -l revision -d 'Revision to process' -r
 complete -c jj-pr -l dry-run -d 'Preview changes without applying them'
 complete -c jj-pr -s h -l help -d 'Show help message'
+complete -c jj-pr -s v -l version -d 'Show version number'
 `;
 }
 
