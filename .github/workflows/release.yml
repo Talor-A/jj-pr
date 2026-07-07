@@ -59,7 +59,12 @@ jobs:
 
       # Publish before pushing: if publish fails, nothing lands in git
       # and a rerun starts from the same version.
-      - run: bun publish --access public
+      # npm, not bun: bun publish doesn't support npm trusted publishing
+      # (OIDC), see oven-sh/bun#22423. Trusted publishing needs npm >= 11.5.1.
+      - name: Publish to npm
+        run: |
+          npm install -g npm@latest
+          npm publish --access public --provenance
 
       - name: Push release commit and tag
         run: git push origin main --follow-tags
