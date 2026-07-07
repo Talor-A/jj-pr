@@ -320,7 +320,7 @@ async function approveAndPushNewBookmarks(
           change,
           ...item,
           headBookmark: `${bookmarkPrefix}${sanitizeBookmarkDescription(changeitem.description, changeitem.change_id)}`,
-          new: true,
+          new: true as const,
         };
       }),
   );

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmdirSync } from "node:fs";
 
 interface FakePullRequest {
   number: number;
@@ -33,6 +33,24 @@ function prJson(pr: FakePullRequest) {
 
 const statePath = process.env.FAKE_GH_STATE;
 if (!statePath) throw new Error("FAKE_GH_STATE is required");
+
+// jj-pr runs gh commands concurrently; the whole-file read-modify-write of
+// the state must be atomic or parallel edits clobber each other. mkdir is
+// atomic, so hold a directory lock for the lifetime of the process.
+const lockPath = `${statePath}.lock`;
+while (true) {
+  try {
+    mkdirSync(lockPath);
+    break;
+  } catch {
+    await Bun.sleep(2);
+  }
+}
+process.on("exit", () => {
+  try {
+    rmdirSync(lockPath);
+  } catch {}
+});
 
 const args = process.argv.slice(2);
 const state = JSON.parse(await Bun.file(statePath).text()) as FakeGhState;
