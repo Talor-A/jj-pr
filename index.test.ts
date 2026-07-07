@@ -668,9 +668,15 @@ describe("main", () => {
     expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
     expect(stdout).toContain("New bookmarks:\ntest/jj/ours");
     expect(stdout).toContain("create these PRs:\ntest/jj/ours -> theirs");
-    expect(stdout).toContain(
-      "## PR Stack\n- https://github.com/example/repo/pull/2\n- `main`",
-    );
+
+    // The other user's PR is a rung of this stack, so it appears in the
+    // stack section and its body gets the section written as well.
+    const stackBody =
+      "## PR Stack\n" +
+      "- https://github.com/example/repo/pull/2\n" +
+      "- https://github.com/example/repo/pull/1\n" +
+      "- `main`\n";
+    expect(stdout).toContain(stackBody);
 
     const ghState = JSON.parse(await readFile(statePath, "utf8"));
     expect(ghState.prs).toEqual([
@@ -679,14 +685,14 @@ describe("main", () => {
         head: "theirs",
         title: "theirs",
         baseRefName: "main",
-        body: "theirs body",
+        body: `theirs body\n\n${stackBody}`,
       },
       {
         number: 2,
         head: "test/jj/ours",
         title: "test/jj/ours",
         baseRefName: "theirs",
-        body: "## PR Stack\n- https://github.com/example/repo/pull/2\n- `main`\n",
+        body: stackBody,
       },
     ]);
   }, 15000);
@@ -834,6 +840,181 @@ describe("main", () => {
         body: stackBody,
       },
     ]);
+  }, 15000);
+
+  test("creates a PR for a hand-named local bookmark without requiring the prefix", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "hotfix.txt"), "hotfix\n");
+    await jj.describe("@", "hotfix login");
+    await jj.bookmark_create("@", "hotfix-login");
+    await jj.git_push_bookmark("hotfix-login");
+
+    await jj.new();
+    await writeFile(join(repo, "top.txt"), "top\n");
+    await jj.describe("@", "top");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const proc = Bun.spawn(["sh", "-c", 'yes "" | "$BUN_EXE" "$JJ_PR_INDEX"'], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        BUN_EXE: bun,
+        FAKE_GH_STATE: statePath,
+        JJ_PR_INDEX: pathToIndexFile,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/top");
+    expect(stdout).toContain(
+      "create these PRs:\nhotfix-login -> main\ntest/jj/top -> hotfix-login",
+    );
+
+    const stackBody =
+      "## PR Stack\n" +
+      "- https://github.com/example/repo/pull/2\n" +
+      "- https://github.com/example/repo/pull/1\n" +
+      "- `main`\n";
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([
+      {
+        number: 1,
+        head: "hotfix-login",
+        title: "hotfix-login",
+        baseRefName: "main",
+        body: stackBody,
+      },
+      {
+        number: 2,
+        head: "test/jj/top",
+        title: "test/jj/top",
+        baseRefName: "hotfix-login",
+        body: stackBody,
+      },
+    ]);
+  }, 15000);
+
+  test("keeps a remote-only bookmark with a PR as a stack rung when pushing a new bookmark", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "shared.txt"), "shared\n");
+    await jj.describe("@", "shared feature");
+    await jj.bookmark_create("@", "shared/feature");
+    await jj.git_push_bookmark("shared/feature");
+    await jj.exec("bookmark delete shared/feature");
+
+    await jj.new();
+    await writeFile(join(repo, "top-feature.txt"), "top\n");
+    await jj.describe("@", "top feature");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 2,
+      prs: [
+        {
+          number: 1,
+          head: "shared/feature",
+          title: "shared feature",
+          baseRefName: "main",
+          body: "shared body",
+        },
+      ],
+    });
+
+    const proc = Bun.spawn(["sh", "-c", 'yes "" | "$BUN_EXE" "$JJ_PR_INDEX"'], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        BUN_EXE: bun,
+        FAKE_GH_STATE: statePath,
+        JJ_PR_INDEX: pathToIndexFile,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/top-feature");
+    expect(stdout).toContain("create these PRs:\ntest/jj/top-feature -> main");
+
+    const stackBody =
+      "## PR Stack\n" +
+      "- https://github.com/example/repo/pull/2\n" +
+      "- https://github.com/example/repo/pull/1\n" +
+      "- `main`\n";
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([
+      {
+        number: 1,
+        head: "shared/feature",
+        title: "shared feature",
+        baseRefName: "main",
+        body: `shared body\n\n${stackBody}`,
+      },
+      {
+        number: 2,
+        head: "test/jj/top-feature",
+        title: "test/jj/top-feature",
+        baseRefName: "main",
+        body: stackBody,
+      },
+    ]);
+  }, 15000);
+
+  test("plans a fresh bookmark when a change's only bookmark is remote-only without a PR", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "feature.txt"), "feature\n");
+    await jj.describe("@", "feature");
+    await jj.bookmark_create("@", "someone/stale");
+    await jj.git_push_bookmark("someone/stale");
+    await jj.exec("bookmark delete someone/stale");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/feature");
+    expect(stdout).not.toContain("someone/stale ->");
   }, 15000);
 
   test("regression: bases a sibling of current main on main", async () => {

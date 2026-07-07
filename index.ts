@@ -25,6 +25,7 @@ import {
 import { absoluteGitDir, loadRebaseState } from "./lib/rebase-state";
 import {
   closestBookmarkBeforeChangeRevset,
+  existingBookmarkResults,
   jjLogBookmarksCommand,
   mergeBookmarkResults,
 } from "./lib/pr-stack";
@@ -194,7 +195,14 @@ async function preferredBookmarkHead(change: string): Promise<{
     }
   }
 
-  return { head: bookmarkHeads[0] };
+  // Without a PR, a bookmark is only a usable head if it is local, since
+  // that is what jj-pr can push -- its name doesn't matter (the configured
+  // prefix only names bookmarks jj-pr invents). A remote-only bookmark
+  // without a PR (deleted locally, or someone else's ref parked on the
+  // commit) is treated as no bookmark at all, so the change gets a fresh
+  // one, identically on every run.
+  const localHeads = await localBookmarkHeadsForChange(change);
+  return { head: bookmarkHeads.find((head) => localHeads.includes(head)) };
 }
 
 function sanitizeBookmarkDescription(
@@ -338,15 +346,7 @@ async function approveAndPushNewBookmarks(
   const newBookmarks = changesNeedingBookmarks
     .filter((bookmark) => bookmark.new)
     .map((b) => b.headBookmark);
-  if (newBookmarks.length === 0)
-    return bookmarksAndPRs as (
-      | { headBookmark: string; existingPr: PullRequest; change: string }
-      | {
-          headBookmark: string;
-          existingPr: undefined;
-          change: string;
-        }
-    )[];
+  if (newBookmarks.length === 0) return existingBookmarkResults(bookmarksAndPRs);
   spinner.stop();
   console.log(`New bookmarks:\n${newBookmarks.join("\n")}`);
 
@@ -371,25 +371,7 @@ async function approveAndPushNewBookmarks(
       }),
   );
 
-  const locallyBookmarked = await Promise.all(
-    bookmarksAndPRs.map(async (item): Promise<BookmarkResult> => {
-      if (!item.headBookmark) return item;
-      const localHeads = await localBookmarkHeadsForChange(item.change);
-      if (
-        localHeads.includes(item.headBookmark) &&
-        item.headBookmark.startsWith(bookmarkPrefix)
-      ) {
-        return item;
-      }
-      return {
-        change: item.change,
-        headBookmark: undefined,
-        existingPr: undefined,
-      };
-    }),
-  );
-
-  return mergeBookmarkResults(locallyBookmarked, changesNeedingBookmarks);
+  return mergeBookmarkResults(bookmarksAndPRs, changesNeedingBookmarks);
 }
 interface PRPlanCreate {
   action: "create";
