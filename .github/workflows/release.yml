@@ -3,29 +3,37 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump level
+        type: choice
+        options: [patch, minor, major]
+        default: patch
 
 permissions:
   contents: write
-  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Skip release commits. Pushes made with GITHUB_TOKEN don't retrigger
+    # workflows anyway; this also covers manual `npm version` pushes.
+    if: github.event_name == 'workflow_dispatch' || !startsWith(github.event.head_commit.message, 'release:')
     steps:
-      - uses: googleapis/release-please-action@v4
-        id: release
-        with:
-          release-type: node
-          package-name: jj-pr
-
       - uses: actions/checkout@v4
-        if: ${{ steps.release.outputs.release_created }}
+        with:
+          # Latest main rather than the triggering SHA, so queued runs
+          # build on top of the previous run's release commit.
+          ref: main
 
       - uses: oven-sh/setup-bun@v2
-        if: ${{ steps.release.outputs.release_created }}
 
       - name: Install jj
-        if: ${{ steps.release.outputs.release_created }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -37,15 +45,27 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - run: bun install --frozen-lockfile
-        if: ${{ steps.release.outputs.release_created }}
-
       - run: bun run typecheck
-        if: ${{ steps.release.outputs.release_created }}
-
       - run: bun run test
-        if: ${{ steps.release.outputs.release_created }}
 
+      - name: Bump version
+        id: bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          tag=$(npm version "${{ inputs.bump || 'patch' }}" -m "release: %s")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # Publish before pushing: if publish fails, nothing lands in git
+      # and a rerun starts from the same version.
       - run: bun publish --access public
-        if: ${{ steps.release.outputs.release_created }}
         env:
           NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Push release commit and tag
+        run: git push origin main --follow-tags
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ steps.bump.outputs.tag }}" --generate-notes
