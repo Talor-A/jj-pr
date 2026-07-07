@@ -310,27 +310,55 @@ async function getBookmarksAndPRsForChanges(
   );
 }
 
+async function takenBookmarkNames(): Promise<Set<string>> {
+  return new Set(
+    lines(
+      await exec(
+        `jj --config-file ${jjconf} bookmark list --all-remotes -T 'name ++ "\\n"'`,
+      ).then(mapToStdout),
+    ),
+  );
+}
+
+function uniqueBookmarkName(base: string, taken: Set<string>): string {
+  let name = base;
+  for (let suffix = 2; taken.has(name); suffix++) {
+    name = `${base}-${suffix}`;
+  }
+  taken.add(name);
+  return name;
+}
+
 async function prepareNewBookmarks(
   bookmarksAndPRs: BookmarkResult[],
 ): Promise<BookmarkResultWithHead[]> {
   const bookmarkPrefix = await getBookmarkPrefix();
-  return await Promise.all(
+  const taken = await takenBookmarkNames();
+  const withDescriptions = await Promise.all(
     bookmarksAndPRs
       .filter((change) => !change.headBookmark)
-      .map(async ({ change, ...item }) => {
-        const changeitem = await execToSchema(
+      .map(async (item) => ({
+        item,
+        changeitem: await execToSchema(
           JJLogItemJsonSchema,
-          `jj --config-file ${jjconf} log -r ${shellQuote(change)} --no-graph -T 'json(self)'`,
-        );
-
-        return {
-          change,
-          ...item,
-          headBookmark: `${bookmarkPrefix}${sanitizeBookmarkDescription(changeitem.description, changeitem.change_id)}`,
-          new: true as const,
-        };
-      }),
+          `jj --config-file ${jjconf} log -r ${shellQuote(item.change)} --no-graph -T 'json(self)'`,
+        ),
+      })),
   );
+
+  // Names are reserved sequentially in stack order: a slug that collides
+  // with an existing bookmark (local or remote) or with an earlier planned
+  // one gets a -2/-3/... suffix, rather than failing `git push --named`
+  // halfway through the stack.
+  return withDescriptions.map(({ item: { change, ...item }, changeitem }) => ({
+    change,
+    ...item,
+    headBookmark: uniqueBookmarkName(
+      `${bookmarkPrefix}${sanitizeBookmarkDescription(changeitem.description, changeitem.change_id)}`,
+      taken,
+    ),
+    new: true as const,
+  }));
 }
 
 async function approveAndPushNewBookmarks(

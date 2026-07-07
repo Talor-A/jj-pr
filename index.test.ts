@@ -1302,6 +1302,136 @@ describe("main", () => {
     expect(stdout).not.toContain("featurelonger");
   }, 15000);
 
+  test("plans suffixed bookmark names when a slug is already taken", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    // An unrelated change already owns the slug the stack below would pick.
+    await jj.new("main");
+    await writeFile(join(repo, "other.txt"), "other\n");
+    await jj.describe("@", "other work");
+    await jj.bookmark_create("@", "test/jj/feature");
+
+    await jj.new("main");
+    await writeFile(join(repo, "parent.txt"), "parent\n");
+    await jj.describe("@", "feature");
+    const parentChange = (
+      await $`jj --config-file ${jjconf} log -r @ --no-graph -T 'change_id ++ "\n"'`
+        .cwd(repo)
+        .text()
+    ).trim();
+
+    await jj.new();
+    await writeFile(join(repo, "child.txt"), "child\n");
+    await jj.describe("@", "feature");
+    const childChange = (
+      await $`jj --config-file ${jjconf} log -r @ --no-graph -T 'change_id ++ "\n"'`
+        .cwd(repo)
+        .text()
+    ).trim();
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result =
+      await $`${bun} ${pathToIndexFile} --dry-run -r ${`${parentChange}|${childChange}`}`
+        .cwd(repo)
+        .env({
+          ...process.env,
+          FAKE_GH_STATE: statePath,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        })
+        .nothrow()
+        .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain(
+      "New bookmarks:\ntest/jj/feature-2\ntest/jj/feature-3",
+    );
+    expect(stdout).toContain(
+      "create these PRs:\ntest/jj/feature-2 -> main\ntest/jj/feature-3 -> test/jj/feature-2",
+    );
+  }, 15000);
+
+  test("pushes suffixed bookmarks for a stack of identically-described changes", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    for (const file of ["fix1.txt", "fix2.txt", "fix3.txt"]) {
+      await writeFile(join(repo, file), `${file}\n`);
+      await jj.describe("@", "fix");
+      await jj.new();
+    }
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const proc = Bun.spawn(
+      ["sh", "-c", 'yes "" | "$BUN_EXE" "$JJ_PR_INDEX" -r "main..@"'],
+      {
+        cwd: repo,
+        env: {
+          ...process.env,
+          BUN_EXE: bun,
+          FAKE_GH_STATE: statePath,
+          JJ_PR_INDEX: pathToIndexFile,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain(
+      "New bookmarks:\ntest/jj/fix\ntest/jj/fix-2\ntest/jj/fix-3",
+    );
+    expect(stdout).toContain(
+      "create these PRs:\ntest/jj/fix -> main\ntest/jj/fix-2 -> test/jj/fix\ntest/jj/fix-3 -> test/jj/fix-2",
+    );
+
+    const stackBody =
+      "## PR Stack\n" +
+      "- https://github.com/example/repo/pull/3\n" +
+      "- https://github.com/example/repo/pull/2\n" +
+      "- https://github.com/example/repo/pull/1\n" +
+      "- `main`\n";
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([
+      {
+        number: 1,
+        head: "test/jj/fix",
+        title: "test/jj/fix",
+        baseRefName: "main",
+        body: stackBody,
+      },
+      {
+        number: 2,
+        head: "test/jj/fix-2",
+        title: "test/jj/fix-2",
+        baseRefName: "test/jj/fix",
+        body: stackBody,
+      },
+      {
+        number: 3,
+        head: "test/jj/fix-3",
+        title: "test/jj/fix-3",
+        baseRefName: "test/jj/fix-2",
+        body: stackBody,
+      },
+    ]);
+  }, 15000);
+
   test("dry run preserves every explicitly selected revision in a compound revset", async () => {
     const { repo } = await setupTempJjRepo();
     const jj = new JJ(repo);
