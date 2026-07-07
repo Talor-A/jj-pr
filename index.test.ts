@@ -264,6 +264,29 @@ describe("bodyWithoutPrStack", () => {
       "just a description\n\n",
     );
   });
+
+  test("strips stack when GitHub returns CRLF line endings", () => {
+    const crlf =
+      "description\r\n\r\n## PR Stack\r\n- https://github.com/x/y/pull/1\r\n- `main`\r\n";
+    expect(bodyWithoutPrStack(crlf)).toBe("description\n\n");
+  });
+
+  test("strips every section when a body already has duplicates", () => {
+    const doubled = `description\n\n${stack}\n${stack}`;
+    expect(bodyWithoutPrStack(doubled)).toBe("description\n\n");
+  });
+
+  test("strips stack when the heading has trailing whitespace", () => {
+    const trailing =
+      "description\n\n## PR Stack \n- https://github.com/x/y/pull/1\n- `main`\n";
+    expect(bodyWithoutPrStack(trailing)).toBe("description\n\n");
+  });
+
+  test("strips stack with multiple blank lines after the heading", () => {
+    const blanks =
+      "description\n\n## PR Stack\n\n\n- https://github.com/x/y/pull/1\n- `main`\n";
+    expect(bodyWithoutPrStack(blanks)).toBe("description\n\n");
+  });
 });
 
 describe("bookmarkHead", () => {
@@ -645,9 +668,15 @@ describe("main", () => {
     expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
     expect(stdout).toContain("New bookmarks:\ntest/jj/ours");
     expect(stdout).toContain("create these PRs:\ntest/jj/ours -> theirs");
-    expect(stdout).toContain(
-      "## PR Stack\n- https://github.com/example/repo/pull/2\n- `main`",
-    );
+
+    // The other user's PR is a rung of this stack, so it appears in the
+    // stack section and its body gets the section written as well.
+    const stackBody =
+      "## PR Stack\n" +
+      "- https://github.com/example/repo/pull/2\n" +
+      "- https://github.com/example/repo/pull/1\n" +
+      "- `main`\n";
+    expect(stdout).toContain(stackBody);
 
     const ghState = JSON.parse(await readFile(statePath, "utf8"));
     expect(ghState.prs).toEqual([
@@ -656,14 +685,14 @@ describe("main", () => {
         head: "theirs",
         title: "theirs",
         baseRefName: "main",
-        body: "theirs body",
+        body: `theirs body\n\n${stackBody}`,
       },
       {
         number: 2,
         head: "test/jj/ours",
         title: "test/jj/ours",
         baseRefName: "theirs",
-        body: "## PR Stack\n- https://github.com/example/repo/pull/2\n- `main`\n",
+        body: stackBody,
       },
     ]);
   }, 15000);
@@ -813,6 +842,181 @@ describe("main", () => {
     ]);
   }, 15000);
 
+  test("creates a PR for a hand-named local bookmark without requiring the prefix", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "hotfix.txt"), "hotfix\n");
+    await jj.describe("@", "hotfix login");
+    await jj.bookmark_create("@", "hotfix-login");
+    await jj.git_push_bookmark("hotfix-login");
+
+    await jj.new();
+    await writeFile(join(repo, "top.txt"), "top\n");
+    await jj.describe("@", "top");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const proc = Bun.spawn(["sh", "-c", 'yes "" | "$BUN_EXE" "$JJ_PR_INDEX"'], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        BUN_EXE: bun,
+        FAKE_GH_STATE: statePath,
+        JJ_PR_INDEX: pathToIndexFile,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/top");
+    expect(stdout).toContain(
+      "create these PRs:\nhotfix-login -> main\ntest/jj/top -> hotfix-login",
+    );
+
+    const stackBody =
+      "## PR Stack\n" +
+      "- https://github.com/example/repo/pull/2\n" +
+      "- https://github.com/example/repo/pull/1\n" +
+      "- `main`\n";
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([
+      {
+        number: 1,
+        head: "hotfix-login",
+        title: "hotfix-login",
+        baseRefName: "main",
+        body: stackBody,
+      },
+      {
+        number: 2,
+        head: "test/jj/top",
+        title: "test/jj/top",
+        baseRefName: "hotfix-login",
+        body: stackBody,
+      },
+    ]);
+  }, 15000);
+
+  test("keeps a remote-only bookmark with a PR as a stack rung when pushing a new bookmark", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "shared.txt"), "shared\n");
+    await jj.describe("@", "shared feature");
+    await jj.bookmark_create("@", "shared/feature");
+    await jj.git_push_bookmark("shared/feature");
+    await jj.exec("bookmark delete shared/feature");
+
+    await jj.new();
+    await writeFile(join(repo, "top-feature.txt"), "top\n");
+    await jj.describe("@", "top feature");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 2,
+      prs: [
+        {
+          number: 1,
+          head: "shared/feature",
+          title: "shared feature",
+          baseRefName: "main",
+          body: "shared body",
+        },
+      ],
+    });
+
+    const proc = Bun.spawn(["sh", "-c", 'yes "" | "$BUN_EXE" "$JJ_PR_INDEX"'], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        BUN_EXE: bun,
+        FAKE_GH_STATE: statePath,
+        JJ_PR_INDEX: pathToIndexFile,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/top-feature");
+    expect(stdout).toContain("create these PRs:\ntest/jj/top-feature -> main");
+
+    const stackBody =
+      "## PR Stack\n" +
+      "- https://github.com/example/repo/pull/2\n" +
+      "- https://github.com/example/repo/pull/1\n" +
+      "- `main`\n";
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([
+      {
+        number: 1,
+        head: "shared/feature",
+        title: "shared feature",
+        baseRefName: "main",
+        body: `shared body\n\n${stackBody}`,
+      },
+      {
+        number: 2,
+        head: "test/jj/top-feature",
+        title: "test/jj/top-feature",
+        baseRefName: "main",
+        body: stackBody,
+      },
+    ]);
+  }, 15000);
+
+  test("plans a fresh bookmark when a change's only bookmark is remote-only without a PR", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "feature.txt"), "feature\n");
+    await jj.describe("@", "feature");
+    await jj.bookmark_create("@", "someone/stale");
+    await jj.git_push_bookmark("someone/stale");
+    await jj.exec("bookmark delete someone/stale");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/feature");
+    expect(stdout).not.toContain("someone/stale ->");
+  }, 15000);
+
   test("regression: bases a sibling of current main on main", async () => {
     const { repo } = await setupTempJjRepo();
     const jj = new JJ(repo);
@@ -849,7 +1053,7 @@ describe("main", () => {
     const stderr = result.stderr.toString();
     expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
     expect(stdout).toContain("create these PRs:\ntest/jj/klmnop -> main");
-    expect(stdout).toContain("## PR Stack\n- `main`");
+    expect(stdout).toContain("## PR Stack\n- [new PR] test/jj/klmnop\n- `main`");
   }, 15000);
 
   test("regression: dry run succeeds after abandoning a change whose bookmark was pushed", async () => {
@@ -874,6 +1078,9 @@ describe("main", () => {
     expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
     expect(stdout).toContain(
       "create these PRs:\ntest/jj/add-stream-flag -> main",
+    );
+    expect(stdout).toContain(
+      "## PR Stack\n- [new PR] test/jj/add-stream-flag\n- `main`",
     );
   }, 15000);
 
@@ -917,7 +1124,9 @@ describe("main", () => {
     const stderr = result.stderr.toString();
     expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
     expect(stdout).toContain("create these PRs:\ntest/jj/feature -> master");
-    expect(stdout).toContain("## PR Stack\n- `master`");
+    expect(stdout).toContain(
+      "## PR Stack\n- [new PR] test/jj/feature\n- `master`",
+    );
     expect(stdout).not.toContain("cursor/0f2f3935\nmaster");
   }, 15000);
 
@@ -973,7 +1182,304 @@ describe("main", () => {
     const stderr = result.stderr.toString();
     expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
     expect(stdout).toContain("create these PRs:\ntest/jj/feature -> master");
-    expect(stdout).toContain("## PR Stack\n- `master`");
+    expect(stdout).toContain(
+      "## PR Stack\n- [new PR] test/jj/feature\n- `master`",
+    );
+  }, 15000);
+
+  test("dry run plans PRs for unbookmarked changes without mutating GitHub", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "feature.txt"), "feature\n");
+    await jj.describe("@", "feature");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/feature");
+    expect(stdout).toContain("create these PRs:\ntest/jj/feature -> main");
+    expect(stdout).toContain("## PR Stack\n- [new PR] test/jj/feature\n- `main`");
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([]);
+    expect(
+      ghState.commands.some(
+        (command: string[]) =>
+          command[0] === "pr" &&
+          (command[1] === "create" || command[1] === "edit"),
+      ),
+    ).toBe(false);
+  }, 15000);
+
+  test("dry run bases a child PR on a planned bookmark for its unbookmarked parent", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "middle.txt"), "middle\n");
+    await jj.describe("@", "middle");
+    const middleChange = (
+      await $`jj --config-file ${jjconf} log -r @ --no-graph -T 'change_id ++ "\n"'`
+        .cwd(repo)
+        .text()
+    ).trim();
+
+    await jj.new();
+    await writeFile(join(repo, "top.txt"), "top\n");
+    await jj.describe("@", "top");
+    await jj.bookmark_create("@", "test/jj/top");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run ${middleChange}`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/middle");
+    expect(stdout).toContain("test/jj/middle -> main");
+    expect(stdout).toContain("test/jj/top -> test/jj/middle");
+    expect(stdout).toContain(
+      "## PR Stack\n- [new PR] test/jj/top\n- [new PR] test/jj/middle\n- `main`",
+    );
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([]);
+  }, 15000);
+
+  test("slugs new bookmark names from only the description's first line", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "feature.txt"), "feature\n");
+    await jj.describe(
+      "@",
+      "feature\n\nlonger body that must not leak into the bookmark name",
+    );
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/feature\n");
+    expect(stdout).not.toContain("featurelonger");
+  }, 15000);
+
+  test("plans suffixed bookmark names when a slug is already taken", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    // An unrelated change already owns the slug the stack below would pick.
+    await jj.new("main");
+    await writeFile(join(repo, "other.txt"), "other\n");
+    await jj.describe("@", "other work");
+    await jj.bookmark_create("@", "test/jj/feature");
+
+    await jj.new("main");
+    await writeFile(join(repo, "parent.txt"), "parent\n");
+    await jj.describe("@", "feature");
+    const parentChange = (
+      await $`jj --config-file ${jjconf} log -r @ --no-graph -T 'change_id ++ "\n"'`
+        .cwd(repo)
+        .text()
+    ).trim();
+
+    await jj.new();
+    await writeFile(join(repo, "child.txt"), "child\n");
+    await jj.describe("@", "feature");
+    const childChange = (
+      await $`jj --config-file ${jjconf} log -r @ --no-graph -T 'change_id ++ "\n"'`
+        .cwd(repo)
+        .text()
+    ).trim();
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result =
+      await $`${bun} ${pathToIndexFile} --dry-run -r ${`${parentChange}|${childChange}`}`
+        .cwd(repo)
+        .env({
+          ...process.env,
+          FAKE_GH_STATE: statePath,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        })
+        .nothrow()
+        .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain(
+      "New bookmarks:\ntest/jj/feature-2\ntest/jj/feature-3",
+    );
+    expect(stdout).toContain(
+      "create these PRs:\ntest/jj/feature-2 -> main\ntest/jj/feature-3 -> test/jj/feature-2",
+    );
+  }, 15000);
+
+  test("pushes suffixed bookmarks for a stack of identically-described changes", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    for (const file of ["fix1.txt", "fix2.txt", "fix3.txt"]) {
+      await writeFile(join(repo, file), `${file}\n`);
+      await jj.describe("@", "fix");
+      await jj.new();
+    }
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const proc = Bun.spawn(
+      ["sh", "-c", 'yes "" | "$BUN_EXE" "$JJ_PR_INDEX" -r "main..@"'],
+      {
+        cwd: repo,
+        env: {
+          ...process.env,
+          BUN_EXE: bun,
+          FAKE_GH_STATE: statePath,
+          JJ_PR_INDEX: pathToIndexFile,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain(
+      "New bookmarks:\ntest/jj/fix\ntest/jj/fix-2\ntest/jj/fix-3",
+    );
+    expect(stdout).toContain(
+      "create these PRs:\ntest/jj/fix -> main\ntest/jj/fix-2 -> test/jj/fix\ntest/jj/fix-3 -> test/jj/fix-2",
+    );
+
+    const stackBody =
+      "## PR Stack\n" +
+      "- https://github.com/example/repo/pull/3\n" +
+      "- https://github.com/example/repo/pull/2\n" +
+      "- https://github.com/example/repo/pull/1\n" +
+      "- `main`\n";
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([
+      {
+        number: 1,
+        head: "test/jj/fix",
+        title: "test/jj/fix",
+        baseRefName: "main",
+        body: stackBody,
+      },
+      {
+        number: 2,
+        head: "test/jj/fix-2",
+        title: "test/jj/fix-2",
+        baseRefName: "test/jj/fix",
+        body: stackBody,
+      },
+      {
+        number: 3,
+        head: "test/jj/fix-3",
+        title: "test/jj/fix-3",
+        baseRefName: "test/jj/fix-2",
+        body: stackBody,
+      },
+    ]);
+  }, 15000);
+
+  test("dry run preserves every explicitly selected revision in a compound revset", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "parent.txt"), "parent\n");
+    await jj.describe("@", "parent");
+    const parentChange = (
+      await $`jj --config-file ${jjconf} log -r @ --no-graph -T 'change_id ++ "\n"'`
+        .cwd(repo)
+        .text()
+    ).trim();
+
+    await jj.new();
+    await writeFile(join(repo, "child.txt"), "child\n");
+    await jj.describe("@", "child");
+    const childChange = (
+      await $`jj --config-file ${jjconf} log -r @ --no-graph -T 'change_id ++ "\n"'`
+        .cwd(repo)
+        .text()
+    ).trim();
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result =
+      await $`${bun} ${pathToIndexFile} --dry-run -r ${`${parentChange}|${childChange}`}`
+        .cwd(repo)
+        .env({
+          ...process.env,
+          FAKE_GH_STATE: statePath,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        })
+        .nothrow()
+        .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/parent\ntest/jj/child");
+    expect(stdout).toContain("test/jj/parent -> main");
+    expect(stdout).toContain("test/jj/child -> test/jj/parent");
+    expect(stdout).toContain(
+      "## PR Stack\n- [new PR] test/jj/child\n- [new PR] test/jj/parent\n- `main`",
+    );
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([]);
   }, 15000);
 
   test("exits cleanly if no stack", async () => {

@@ -24,9 +24,12 @@ import {
 } from "./lib/rebase-stacks-after-fetch";
 import { absoluteGitDir, loadRebaseState } from "./lib/rebase-state";
 import {
-  closestBookmarkBeforeChangeRevset,
+  existingBookmarkResults,
   jjLogBookmarksCommand,
   mergeBookmarkResults,
+  proposedBookmarkRevset,
+  type BookmarkResult,
+  type BookmarkResultWithHead,
 } from "./lib/pr-stack";
 import {
   JJLogItemJsonSchema,
@@ -74,8 +77,13 @@ async function getBookmarkPrefix(): Promise<string> {
   return _bookmarkPrefix;
 }
 
+// Matches a generated "## PR Stack" section and the bullet list that follows.
+// Global so every prior section is stripped (a body that already accumulated
+// duplicates self-heals), and tolerant of trailing heading whitespace and
+// extra blank lines after the heading. Bodies are normalized to LF before this
+// runs (see bodyWithoutPrStack), since GitHub returns PR bodies with CRLF.
 const PR_STACK_SECTION_PATTERN =
-  /(?:^|\n)(?:<!-- GENERATED_PR_STACK -->\n)?## PR Stack\n\n?(?:- .+(?:\n|$))+/m;
+  /(?:^|\n)(?:<!-- GENERATED_PR_STACK -->\n)?## PR Stack[ \t]*\n\n*(?:- .+(?:\n|$))+/gm;
 
 async function confirm(
   message: string = "proceed? (⏎ / n)",
@@ -98,7 +106,13 @@ function unique(values: string[]): string[] {
 }
 
 export function bodyWithoutPrStack(body: string): string {
-  const stripped = body.replace(PR_STACK_SECTION_PATTERN, "").trimEnd();
+  // GitHub returns PR bodies with CRLF line endings, but we author them with
+  // LF. Normalize first so the pattern matches on round-trips; otherwise the
+  // old section is left in place and a duplicate gets appended.
+  const stripped = body
+    .replace(/\r\n/g, "\n")
+    .replace(PR_STACK_SECTION_PATTERN, "")
+    .trimEnd();
 
   return stripped.length > 0 ? `${stripped}\n\n` : "";
 }
@@ -183,14 +197,23 @@ async function preferredBookmarkHead(change: string): Promise<{
     }
   }
 
-  return { head: bookmarkHeads[0] };
+  // Without a PR, a bookmark is only a usable head if it is local, since
+  // that is what jj-pr can push -- its name doesn't matter (the configured
+  // prefix only names bookmarks jj-pr invents). A remote-only bookmark
+  // without a PR (deleted locally, or someone else's ref parked on the
+  // commit) is treated as no bookmark at all, so the change gets a fresh
+  // one, identically on every run.
+  const localHeads = await localBookmarkHeadsForChange(change);
+  return { head: bookmarkHeads.find((head) => localHeads.includes(head)) };
 }
 
 function sanitizeBookmarkDescription(
   description: string,
   fallback: string,
 ): string {
-  const slug = (description || fallback)
+  // Only the summary line belongs in a bookmark name; stripping the newlines
+  // out of a multi-line description would glue the body onto it.
+  const slug = (description.split(/\r?\n/)[0] || fallback)
     .replace(/ /g, "-")
     .replace(/[^a-zA-Z0-9_-]/g, "")
     .replace(/--+/g, "-")
@@ -269,19 +292,6 @@ async function handleFix(spinner: Ora, revset: string, dryRun: boolean) {
   }
 }
 
-type BookmarkResult =
-  | { headBookmark: string; existingPr: PullRequest; change: string }
-  | {
-      headBookmark: string;
-      existingPr: undefined;
-      change: string;
-    }
-  | {
-      headBookmark: undefined;
-      existingPr: undefined;
-      change: string;
-    };
-
 async function getBookmarksAndPRsForChanges(
   changes: string[],
 ): Promise<BookmarkResult[]> {
@@ -300,48 +310,73 @@ async function getBookmarksAndPRsForChanges(
   );
 }
 
+async function takenBookmarkNames(): Promise<Set<string>> {
+  return new Set(
+    lines(
+      await exec(
+        `jj --config-file ${jjconf} bookmark list --all-remotes -T 'name ++ "\\n"'`,
+      ).then(mapToStdout),
+    ),
+  );
+}
+
+function uniqueBookmarkName(base: string, taken: Set<string>): string {
+  let name = base;
+  for (let suffix = 2; taken.has(name); suffix++) {
+    name = `${base}-${suffix}`;
+  }
+  taken.add(name);
+  return name;
+}
+
+async function prepareNewBookmarks(
+  bookmarksAndPRs: BookmarkResult[],
+): Promise<BookmarkResultWithHead[]> {
+  const bookmarkPrefix = await getBookmarkPrefix();
+  const taken = await takenBookmarkNames();
+  const withDescriptions = await Promise.all(
+    bookmarksAndPRs
+      .filter((change) => !change.headBookmark)
+      .map(async (item) => ({
+        item,
+        changeitem: await execToSchema(
+          JJLogItemJsonSchema,
+          `jj --config-file ${jjconf} log -r ${shellQuote(item.change)} --no-graph -T 'json(self)'`,
+        ),
+      })),
+  );
+
+  // Names are reserved sequentially in stack order: a slug that collides
+  // with an existing bookmark (local or remote) or with an earlier planned
+  // one gets a -2/-3/... suffix, rather than failing `git push --named`
+  // halfway through the stack.
+  return withDescriptions.map(({ item: { change, ...item }, changeitem }) => ({
+    change,
+    ...item,
+    headBookmark: uniqueBookmarkName(
+      `${bookmarkPrefix}${sanitizeBookmarkDescription(changeitem.description, changeitem.change_id)}`,
+      taken,
+    ),
+    new: true as const,
+  }));
+}
+
 async function approveAndPushNewBookmarks(
   spinner: Ora,
   dryRun: boolean,
   bookmarksAndPRs: BookmarkResult[],
   approvedNewBookmarks: Set<string>,
-) {
-  const bookmarkPrefix = await getBookmarkPrefix();
-  const changesNeedingBookmarks = await Promise.all(
-    bookmarksAndPRs
-      .filter((change) => !change.headBookmark)
-      .map(async ({ change, ...item }) => {
-        const changeitem = await execToSchema(
-          JJLogItemJsonSchema,
-          `jj --config-file ${jjconf} log -r ${shellQuote(change)} --no-graph -T 'json(self)'`,
-        );
-
-        return {
-          change,
-          ...item,
-          headBookmark: `${bookmarkPrefix}${sanitizeBookmarkDescription(changeitem.description, changeitem.change_id)}`,
-          new: true as const,
-        };
-      }),
-  );
-  const newBookmarks = changesNeedingBookmarks
-    .filter((bookmark) => bookmark.new)
-    .map((b) => b.headBookmark);
-  if (newBookmarks.length === 0)
-    return bookmarksAndPRs as (
-      | { headBookmark: string; existingPr: PullRequest; change: string }
-      | {
-          headBookmark: string;
-          existingPr: undefined;
-          change: string;
-        }
-    )[];
+): Promise<BookmarkResultWithHead[]> {
+  const changesNeedingBookmarks = await prepareNewBookmarks(bookmarksAndPRs);
+  const newBookmarks = changesNeedingBookmarks.map((b) => b.headBookmark);
+  if (newBookmarks.length === 0) return existingBookmarkResults(bookmarksAndPRs);
   spinner.stop();
   console.log(`New bookmarks:\n${newBookmarks.join("\n")}`);
 
   if (dryRun) {
-    console.log("dry run: skipping push.");
-    process.exit(0);
+    // Don't push, but keep the planned bookmarks so the rest of the dry run
+    // can report the PRs they would produce.
+    return mergeBookmarkResults(bookmarksAndPRs, changesNeedingBookmarks);
   }
   const shouldPush = await confirm("push new bookmarks? (⏎ / n)");
   if (!shouldPush) {
@@ -349,36 +384,59 @@ async function approveAndPushNewBookmarks(
   }
   spinner.start();
   await Promise.all(
-    changesNeedingBookmarks
-      .filter((bookmark) => bookmark.new)
-      .map(async ({ headBookmark, change }) => {
-        spinner.text = `pushing ${headBookmark}...`;
-        approvedNewBookmarks.add(headBookmark);
-        await exec(
-          `jj --config-file ${jjconf} git push --named ${headBookmark}=${change}`,
-        );
-      }),
-  );
-
-  const locallyBookmarked = await Promise.all(
-    bookmarksAndPRs.map(async (item): Promise<BookmarkResult> => {
-      if (!item.headBookmark) return item;
-      const localHeads = await localBookmarkHeadsForChange(item.change);
-      if (
-        localHeads.includes(item.headBookmark) &&
-        item.headBookmark.startsWith(bookmarkPrefix)
-      ) {
-        return item;
-      }
-      return {
-        change: item.change,
-        headBookmark: undefined,
-        existingPr: undefined,
-      };
+    changesNeedingBookmarks.map(async ({ headBookmark, change }) => {
+      spinner.text = `pushing ${headBookmark}...`;
+      approvedNewBookmarks.add(headBookmark);
+      await exec(
+        `jj --config-file ${jjconf} git push --named ${headBookmark}=${change}`,
+      );
     }),
   );
 
-  return mergeBookmarkResults(locallyBookmarked, changesNeedingBookmarks);
+  return mergeBookmarkResults(bookmarksAndPRs, changesNeedingBookmarks);
+}
+
+async function preferredProposedBookmarkHead(
+  change: string,
+  bookmarksAndPRs: BookmarkResultWithHead[],
+): Promise<{
+  head?: string;
+  existingPr?: PullRequest;
+}> {
+  const plannedHeadsByChange = new Map(
+    bookmarksAndPRs
+      .filter((item) => item.new)
+      .map((item) => [item.change, item.headBookmark]),
+  );
+  const closestBookmarkChanges = lines(
+    await exec(
+      `jj --config-file ${jjconf} log --no-graph -r ${shellQuote(
+        `heads(trunk()..${change}- & ${proposedBookmarkRevset(bookmarksAndPRs)})`,
+      )} -T 'change_id ++ "\n"'`,
+    ).then(mapToStdout),
+  );
+
+  const bookmarkHeads = unique(
+    (
+      await Promise.all(
+        closestBookmarkChanges.map(async (candidateChange) => [
+          ...(plannedHeadsByChange.get(candidateChange)
+            ? [plannedHeadsByChange.get(candidateChange)!]
+            : []),
+          ...(await bookmarkHeadsForChange(candidateChange)),
+        ]),
+      )
+    ).flat(),
+  );
+
+  for (const head of bookmarkHeads) {
+    const existingPr = await prForHead(head);
+    if (existingPr) {
+      return { head, existingPr };
+    }
+  }
+
+  return { head: bookmarkHeads[0] };
 }
 interface PRPlanCreate {
   action: "create";
@@ -406,21 +464,15 @@ interface PRPlanNoop {
 type PRPlan = PRPlanCreate | PRPlanUpdate | PRPlanNoop;
 
 async function createPrPlans(
-  bookmarksAndPRs: (
-    | { headBookmark: string; existingPr: PullRequest; change: string }
-    | { headBookmark: string; existingPr: undefined; change: string }
-  )[],
+  bookmarksAndPRs: BookmarkResultWithHead[],
   trunk: string,
 ): Promise<PRPlan[]> {
   const plans = await Promise.all(
     bookmarksAndPRs.map(
       async ({ headBookmark, existingPr, change }): Promise<PRPlan> => {
         const baseBranch =
-          (
-            await preferredBookmarkHead(
-              closestBookmarkBeforeChangeRevset(change),
-            )
-          ).head ?? trunk;
+          (await preferredProposedBookmarkHead(change, bookmarksAndPRs)).head ??
+          trunk;
 
         if (!existingPr) {
           return { action: "create", headBookmark, baseBranch, change };
@@ -499,6 +551,87 @@ function plansToString(plans: PRPlan[]): string {
     result += "\n";
   }
   return result;
+}
+
+type PlannedStackEntry =
+  | {
+      kind: "existing";
+      change: string;
+      headBookmark: string;
+      pr: PullRequest;
+    }
+  | {
+      kind: "new";
+      change: string;
+      headBookmark: string;
+    };
+
+function plannedStackEntries(plans: PRPlan[]): PlannedStackEntry[] {
+  return plans.map((plan) => {
+    if (plan.action === "create") {
+      return {
+        kind: "new",
+        change: plan.change,
+        headBookmark: plan.headBookmark,
+      };
+    }
+
+    return {
+      kind: "existing",
+      change: plan.change,
+      headBookmark: plan.headBookmark,
+      pr: plan.existingPr,
+    };
+  });
+}
+
+// Dry-run stand-in for the map alignPRs builds on a real run: the PRs that
+// already exist, keyed by change. Planned PRs have no number yet, so they are
+// absent here and only appear in the planned stack markdown.
+function plannedPrInfo(
+  plans: PRPlan[],
+): Map<string, { number: number; body: string }> {
+  return new Map(
+    plannedStackEntries(plans)
+      .filter(
+        (entry): entry is Extract<PlannedStackEntry, { kind: "existing" }> =>
+          entry.kind === "existing",
+      )
+      .map((entry) => [
+        entry.change,
+        { number: entry.pr.number, body: entry.pr.body ?? "" },
+      ]),
+  );
+}
+
+function plannedStackMarkdown(
+  plans: PRPlan[],
+  changes: string[],
+  trunk: string,
+  nameWithOwner: string,
+): string {
+  const entriesByChange = new Map(
+    plannedStackEntries(plans).map((entry) => [entry.change, entry]),
+  );
+  const stackLines = ["## PR Stack"];
+  for (const change of [...changes].reverse()) {
+    const entry = entriesByChange.get(change);
+    if (entry === undefined) {
+      continue;
+    }
+
+    if (entry.kind === "existing") {
+      stackLines.push(
+        `- https://github.com/${nameWithOwner}/pull/${entry.pr.number}`,
+      );
+      continue;
+    }
+
+    stackLines.push(`- [new PR] ${entry.headBookmark}`);
+  }
+  stackLines.push(`- \`${trunk}\``);
+
+  return `${stackLines.join("\n")}\n`;
 }
 
 async function alignPRs(spinner: Ora, plans: PRPlan[], dryRun: boolean) {
@@ -612,6 +745,24 @@ async function doRebase(spinner: Ora, dryRun: boolean, gitDir: string) {
   }
 }
 
+// Expands the user-supplied -r value into a revset covering every revision it
+// resolves to. constructRevset collapses a compound revset like "a|b" to its
+// heads, which silently drops explicitly selected revisions; resolving to
+// concrete change ids first and expanding each one preserves them all.
+async function constructRevsetForRevision(revision: string): Promise<string> {
+  const revisions = await exec(
+    `jj --config-file ${jjconf} log --no-graph --reversed -r ${shellQuote(revision)} -T 'change_id ++ "\n"'`,
+  )
+    .then(mapToStdout)
+    .then(lines);
+
+  if (revisions.length === 0) {
+    return "";
+  }
+
+  return revisions.map(constructRevset).join(" | ");
+}
+
 export async function main(spinner: Ora, args: CliArgs) {
   const trunk = await ensureTrunk();
   const gitDir = await absoluteGitDir();
@@ -622,7 +773,12 @@ export async function main(spinner: Ora, args: CliArgs) {
     await doRebase(spinner, args.dryRun, gitDir);
   }
 
-  const revset = constructRevset(args.revision);
+  const revset = await constructRevsetForRevision(args.revision);
+  if (!revset) {
+    spinner.text = "nothing to do.";
+    spinner.stopAndPersist();
+    process.exit(0);
+  }
 
   await handleFix(spinner, revset, args.dryRun);
 
@@ -691,18 +847,22 @@ export async function main(spinner: Ora, args: CliArgs) {
     `gh repo view --json nameWithOwner`,
   );
 
-  const stackLines = ["## PR Stack"];
-  for (const change of [...changes].reverse()) {
-    const number = prInfo.get(change)?.number;
-    if (number !== undefined) {
-      stackLines.push(
-        `- https://github.com/${repo.nameWithOwner}/pull/${number}`,
-      );
-    }
-  }
-  stackLines.push(`- \`${trunk}\``);
-
-  const stackMarkdown = `${stackLines.join("\n")}\n`;
+  const stackMarkdown = args.dryRun
+    ? plannedStackMarkdown(plans, changes, trunk, repo.nameWithOwner)
+    : (() => {
+        const stackLines = ["## PR Stack"];
+        for (const change of [...changes].reverse()) {
+          const number = prInfo.get(change)?.number;
+          if (number !== undefined) {
+            stackLines.push(
+              `- https://github.com/${repo.nameWithOwner}/pull/${number}`,
+            );
+          }
+        }
+        stackLines.push(`- \`${trunk}\``);
+        return `${stackLines.join("\n")}\n`;
+      })();
+  const descriptionPrInfo = args.dryRun ? plannedPrInfo(plans) : prInfo;
   spinner.stop();
 
   spinner.text = "updating descriptions...";
@@ -710,7 +870,7 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   await Promise.allSettled(
     changes.map(async (change) => {
-      const number = prInfo.get(change)?.number;
+      const number = descriptionPrInfo.get(change)?.number;
       if (number === undefined) {
         return;
       }
