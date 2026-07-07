@@ -212,35 +212,14 @@ function sanitizeBookmarkDescription(
   return slug || fallback;
 }
 
-async function handlePush(spinner: Ora, revset: string, dryRun: boolean) {
-  spinner.start();
-  spinner.text = "planning push...";
-
-  const dryRunOutput = await jj(`git push --dry-run -r '${revset}'`)
+// Gather half: read-only. Returns the human-readable push preview, or null
+// when jj reports nothing to push. Strips jj's dry-run disclaimer line.
+async function planPush(revset: string): Promise<string | null> {
+  const output = await jj(`git push --dry-run -r '${revset}'`)
     .then(combineStdoutAndStderr)
-    .then((str) => str.trim());
-
-  if (dryRunOutput.trim().endsWith("Nothing changed.")) {
-    return;
-  }
-  spinner.stop();
-
-  if (dryRun) {
-    console.log(dryRunOutput);
-    return;
-  }
-  console.log(dryRunOutput.replace("\nDry-run requested, not pushing.", ""));
-
-  const confirmed = await confirm("\npush these bookmarks? (⏎ / n)");
-
-  if (!confirmed) {
-    console.log("Aborted.");
-    process.exit(1);
-  }
-
-  spinner.text = "pushing...";
-  spinner.start();
-  await jj(`git push -r '${revset}'`);
+    .then((s) => s.trim());
+  if (output.endsWith("Nothing changed.")) return null;
+  return output.replace("\nDry-run requested, not pushing.", "");
 }
 
 async function ensureTrunk(): Promise<string> {
@@ -737,7 +716,26 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   await handleFix(spinner, revset, args.dryRun);
 
-  await handlePush(spinner, revset, args.dryRun);
+  spinner.start();
+  spinner.text = "planning push...";
+  const pushPreview = await planPush(revset);
+  if (pushPreview !== null) {
+    spinner.stop();
+    console.log(pushPreview);
+
+    if (!args.dryRun) {
+      const confirmed = await confirm("\npush these bookmarks? (⏎ / n)");
+
+      if (!confirmed) {
+        console.log("Aborted.");
+        process.exit(1);
+      }
+
+      spinner.text = "pushing...";
+      spinner.start();
+      await jj(`git push -r '${revset}'`);
+    }
+  }
 
   spinner.start();
   spinner.text = "gathering changes...";
