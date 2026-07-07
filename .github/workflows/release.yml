@@ -61,10 +61,10 @@ jobs:
       # and a rerun starts from the same version.
       # npm, not bun: bun publish doesn't support npm trusted publishing
       # (OIDC), see oven-sh/bun#22423. Trusted publishing needs npm >= 11.5.1.
+      # npx rather than a global upgrade: trusted publishing needs
+      # npm >= 11.5.1, and `npm install -g` hits EACCES on /usr/local.
       - name: Publish to npm
-        run: |
-          npm install -g npm@latest
-          npm publish --access public --provenance
+        run: npx -y npm@latest publish --access public --provenance
 
       - name: Push release commit and tag
         run: git push origin main --follow-tags
