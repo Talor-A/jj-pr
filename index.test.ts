@@ -714,6 +714,105 @@ describe("main", () => {
     ]);
   }, 15000);
 
+  test("regression: first run preserves existing PR stack entries when creating a top bookmark", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "base-feature.txt"), "base\n");
+    await jj.describe("@", "base feature");
+    await jj.bookmark_create("@", "test/jj/base-feature");
+    await jj.git_push_bookmark("test/jj/base-feature");
+
+    await jj.new();
+    await writeFile(join(repo, "middle-feature.txt"), "middle\n");
+    await jj.describe("@", "middle feature");
+    await jj.bookmark_create("@", "test/jj/middle-feature");
+    await jj.git_push_bookmark("test/jj/middle-feature");
+
+    await jj.new();
+    await writeFile(join(repo, "top-feature.txt"), "top\n");
+    await jj.describe("@", "top feature");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 3,
+      prs: [
+        {
+          number: 1,
+          head: "test/jj/base-feature",
+          title: "base feature",
+          baseRefName: "main",
+          body: "base body",
+        },
+        {
+          number: 2,
+          head: "test/jj/middle-feature",
+          title: "middle feature",
+          baseRefName: "test/jj/base-feature",
+          body: "middle body",
+        },
+      ],
+    });
+
+    const proc = Bun.spawn(["sh", "-c", 'yes "" | "$BUN_EXE" "$JJ_PR_INDEX"'], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        BUN_EXE: bun,
+        FAKE_GH_STATE: statePath,
+        JJ_PR_INDEX: pathToIndexFile,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/top-feature");
+    expect(stdout).toContain(
+      "create these PRs:\ntest/jj/top-feature -> test/jj/middle-feature",
+    );
+
+    const stackBody =
+      "## PR Stack\n" +
+      "- https://github.com/example/repo/pull/3\n" +
+      "- https://github.com/example/repo/pull/2\n" +
+      "- https://github.com/example/repo/pull/1\n" +
+      "- `main`\n";
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([
+      {
+        number: 1,
+        head: "test/jj/base-feature",
+        title: "base feature",
+        baseRefName: "main",
+        body: `base body\n\n${stackBody}`,
+      },
+      {
+        number: 2,
+        head: "test/jj/middle-feature",
+        title: "middle feature",
+        baseRefName: "test/jj/base-feature",
+        body: `middle body\n\n${stackBody}`,
+      },
+      {
+        number: 3,
+        head: "test/jj/top-feature",
+        title: "test/jj/top-feature",
+        baseRefName: "test/jj/middle-feature",
+        body: stackBody,
+      },
+    ]);
+  }, 15000);
+
   test("regression: bases a sibling of current main on main", async () => {
     const { repo } = await setupTempJjRepo();
     const jj = new JJ(repo);
