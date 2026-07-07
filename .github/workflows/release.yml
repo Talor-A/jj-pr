@@ -3,79 +3,48 @@ name: Release
 on:
   push:
     branches: [main]
-  # Canary publishes only; the release job never runs on PRs. Lives in
+  # Canary publishes only; the publish job never runs on PRs. Lives in
   # this file because npm's trusted publisher is pinned to release.yml.
   pull_request:
-  workflow_dispatch:
-    inputs:
-      bump:
-        description: Version bump level
-        type: choice
-        options: [patch, minor, major]
-        default: patch
 
 jobs:
-  release:
+  # Publishes when a release PR (maintained by release-pr.yml) merges.
+  # The version bump lands on main through that PR like any other
+  # change, so nothing here pushes to main and the branch ruleset
+  # stays intact. Requires squash-merging the release PR: the guard
+  # matches the squashed commit title.
+  publish:
     runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'push' &&
+      startsWith(github.event.head_commit.message, 'release: v')
     permissions:
       contents: write
       id-token: write
     concurrency:
       group: release
       cancel-in-progress: false
-    # Skip release commits. Pushes made with GITHUB_TOKEN don't retrigger
-    # workflows anyway; this also covers manual `npm version` pushes.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' &&
-       !startsWith(github.event.head_commit.message, 'release:'))
     steps:
       - uses: actions/checkout@v4
-        with:
-          # Latest main rather than the triggering SHA, so queued runs
-          # build on top of the previous run's release commit.
-          ref: main
 
       - uses: oven-sh/setup-bun@v2
 
-      - name: Install jj
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag=$(gh release view --repo jj-vcs/jj --json tagName -q .tagName)
-          mkdir -p "$HOME/.local/bin"
-          gh release download "$tag" --repo jj-vcs/jj \
-            --pattern "jj-${tag}-x86_64-unknown-linux-musl.tar.gz" \
-            --output - | tar xz -C "$HOME/.local/bin" ./jj
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
+      # No typecheck/test here: the release PR passed the required
+      # checks to merge. bun install is for prepublishOnly's build.
       - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun run test
 
-      - name: Bump version
-        id: bump
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          tag=$(npm version "${{ inputs.bump || 'patch' }}" -m "release: %s")
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      # Publish before pushing: if publish fails, nothing lands in git
-      # and a rerun starts from the same version.
       # npm, not bun: bun publish doesn't support npm trusted publishing
       # (OIDC), see oven-sh/bun#22423. Trusted publishing needs npm >= 11.5.1,
       # hence npx (a global upgrade hits EACCES on /usr/local).
       - name: Publish to npm
         run: npx -y npm@latest publish --access public --provenance
 
-      - name: Push release commit and tag
-        run: git push origin main --follow-tags
-
-      - name: Create GitHub release
+      - name: Create GitHub release and tag
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ steps.bump.outputs.tag }}" --generate-notes
+        run: |
+          version=$(jq -r .version package.json)
+          gh release create "v$version" --target "$GITHUB_SHA" --generate-notes
 
   canary:
     runs-on: ubuntu-latest

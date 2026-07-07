@@ -1,0 +1,102 @@
+name: Release PR
+
+# Maintains a standing "release: vX.Y.Z" PR that bumps package.json.
+# Squash-merging it triggers the publish job in release.yml. The bump
+# level comes from merged commit titles since the last release: any
+# "major:" prefix wins, else any "minor:" prefix, else patch.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump level (auto = detect from commit titles)
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+
+permissions:
+  contents: write
+  pull-requests: write
+  # For dispatching CI onto the release branch.
+  actions: write
+
+concurrency:
+  group: release-pr
+  cancel-in-progress: true
+
+jobs:
+  release-pr:
+    runs-on: ubuntu-latest
+    # A release merge is handled by release.yml; don't propose another
+    # release on top of it. The next feature merge revives the PR.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      !startsWith(github.event.head_commit.message, 'release: v')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Latest main, not the triggering SHA, so back-to-back merges
+          # converge on one PR. Full history for the tag-bounded scan.
+          ref: main
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: next
+        run: |
+          last_tag=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          titles=$(git log --format=%s ${last_tag:+"$last_tag..HEAD"})
+          if [ -z "$titles" ]; then
+            echo "nothing to release since ${last_tag:-the beginning}"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          bump="${{ inputs.bump || 'auto' }}"
+          if [ "$bump" = auto ]; then
+            if grep -q '^major:' <<<"$titles"; then bump=major
+            elif grep -q '^minor:' <<<"$titles"; then bump=minor
+            else bump=patch
+            fi
+          fi
+          version=$(npm version "$bump" --no-git-tag-version)
+          echo "version=${version#v}" >> "$GITHUB_OUTPUT"
+          echo "last_tag=$last_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Update release PR
+        if: steps.next.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.next.outputs.version }}
+          LAST_TAG: ${{ steps.next.outputs.last_tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B release-pr
+          git commit -am "release: v$VERSION"
+          git push -f origin release-pr
+
+          {
+            echo "Squash-merging this PR publishes \`jj-pr@$VERSION\` to npm and creates the GitHub release. Maintained by \`release-pr.yml\`; it refreshes on every merge to main."
+            echo
+            echo "Included since the last release:"
+            # HEAD~1 excludes the release commit itself.
+            git log --format='- %s' ${LAST_TAG:+"$LAST_TAG..HEAD~1"}
+          } > /tmp/pr-body.md
+
+          pr=$(gh pr list --head release-pr --json number --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then
+            gh pr create --head release-pr --title "release: v$VERSION" \
+              --body-file /tmp/pr-body.md
+          else
+            gh pr edit "$pr" --title "release: v$VERSION" --body-file /tmp/pr-body.md
+          fi
+
+      # Pushes made with GITHUB_TOKEN don't trigger workflows, so the
+      # required status checks on the release PR come from dispatching
+      # CI onto its branch explicitly.
+      - name: Trigger CI on the release branch
+        if: steps.next.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci.yml --ref release-pr
