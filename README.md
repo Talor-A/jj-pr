@@ -57,6 +57,14 @@ bookmark-prefix = "ta/jj/"
 the default prefix is `<user>/jj/` derived from `user.email`.
 
 
+## Skill (Claude Code / other agents)
+
+This repo ships a [skill](skills/jj-pr/SKILL.md) that teaches coding agents how to use `jj-pr` instead of hand-rolling `jj git push` + `gh pr create`. Install it with [`skills`](https://github.com/vercel-labs/skills):
+
+```sh
+npx skills add Talor-A/jj-pr
+```
+
 ## Usage
 
 ```sh
