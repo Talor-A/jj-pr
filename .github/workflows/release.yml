@@ -1,7 +1,12 @@
 name: Release
 
 on:
-  push:
+  # Ride on CI finishing for main instead of a second push trigger, so
+  # typecheck/test don't run twice per merge; the release job gates on
+  # CI's conclusion below.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   # Canary publishes only; the release job never runs on PRs. Lives in
   # this file because npm's trusted publisher is pinned to release.yml.
@@ -23,12 +28,15 @@ jobs:
     concurrency:
       group: release
       cancel-in-progress: false
-    # Skip release commits. Pushes made with GITHUB_TOKEN don't retrigger
-    # workflows anyway; this also covers manual `npm version` pushes.
+    # Release only when CI succeeded (or on manual dispatch, which skips
+    # the gate). Release commits don't loop: pushes made with GITHUB_TOKEN
+    # don't trigger CI at all; the message guard also covers manual
+    # `npm version` pushes.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' &&
-       !startsWith(github.event.head_commit.message, 'release:'))
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       !startsWith(github.event.workflow_run.head_commit.message, 'release:'))
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,20 +46,10 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
-      - name: Install jj
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag=$(gh release view --repo jj-vcs/jj --json tagName -q .tagName)
-          mkdir -p "$HOME/.local/bin"
-          gh release download "$tag" --repo jj-vcs/jj \
-            --pattern "jj-${tag}-x86_64-unknown-linux-musl.tar.gz" \
-            --output - | tar xz -C "$HOME/.local/bin" ./jj
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
+      # No typecheck/test/jj here: CI already ran them for this commit,
+      # and the workflow_run gate above requires it to have succeeded.
+      # bun install stays because publish's prepublishOnly runs the build.
       - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun run test
 
       - name: Bump version
         id: bump
