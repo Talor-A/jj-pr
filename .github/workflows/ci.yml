@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Dispatched by release-pr.yml onto the release branch: its pushes use
+  # GITHUB_TOKEN, which never triggers workflows, but the release PR
+  # still needs the required status checks.
+  workflow_dispatch:
 
 jobs:
   typecheck:
