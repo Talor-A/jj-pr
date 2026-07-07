@@ -127,7 +127,7 @@ export async function bookmarkHeadsForChange(
   change: string,
 ): Promise<string[]> {
   const bookmarks = lines(
-    (await exec(jjLogBookmarksCommand(jjconf, change))).stdout,
+    (await exec(jjLogBookmarksCommand(change))).stdout,
   );
 
   return unique(bookmarks.map(bookmarkHead));
