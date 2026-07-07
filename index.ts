@@ -634,6 +634,24 @@ function plannedStackMarkdown(
   return `${stackLines.join("\n")}\n`;
 }
 
+// `gh pr create --fill` derives the title/body from local git commits, which
+// don't exist in a non-colocated workspace (jj only auto-exports bookmarks to
+// git refs in colocated checkouts). Build them from the jj description instead.
+async function prTitleAndBody(
+  change: string,
+  fallbackTitle: string,
+): Promise<{ title: string; body: string }> {
+  const item = await execToSchema(
+    JJLogItemJsonSchema,
+    `jj --config-file ${jjconf} log -r ${shellQuote(change)} --no-graph -T 'json(self)'`,
+  );
+  const [summary = "", ...rest] = item.description.split(/\r?\n/);
+  return {
+    title: summary.trim() || fallbackTitle,
+    body: rest.join("\n").trim(),
+  };
+}
+
 async function alignPRs(spinner: Ora, plans: PRPlan[], dryRun: boolean) {
   const prsByChange = new Map<string, { number: number; body: string }>();
 
@@ -664,8 +682,10 @@ async function alignPRs(spinner: Ora, plans: PRPlan[], dryRun: boolean) {
 
     if (action === "create") {
       spinner.text = `creating new PR for ${headBookmark}...`;
-      await exec(
-        `gh pr create --head ${headBookmark} --base ${baseBranch} --draft --fill`,
+      const { title, body } = await prTitleAndBody(change, headBookmark);
+      await execWithStdin(
+        `gh pr create --head ${headBookmark} --base ${baseBranch} --draft --title ${shellQuote(title)} --body-file -`,
+        body,
       );
 
       const createdPrs = await execToSchema(

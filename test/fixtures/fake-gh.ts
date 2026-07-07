@@ -80,8 +80,10 @@ if (args[0] === "pr" && args[1] === "list") {
 if (args[0] === "pr" && args[1] === "create") {
   const head = getOption(args, "--head");
   const baseRefName = getOption(args, "--base");
+  const title = args.includes("--title") ? getOption(args, "--title") : head;
+  const body = args.includes("--body-file") ? readFileSync(0, "utf8") : "";
   const number = state.nextNumber++;
-  state.prs.push({ number, head, title: head, baseRefName, body: "" });
+  state.prs.push({ number, head, title, baseRefName, body });
   await save();
   console.log(`https://github.com/example/repo/pull/${number}`);
   process.exit(0);
