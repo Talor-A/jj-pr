@@ -33,17 +33,20 @@ npm i -g jj-pr
 yarn global add jj-pr
 ```
 
-optionally, configure as an alias in `.config/jj/config.toml`. This will let you use `jj pr` as an alias for `jj-pr`. The docs below will use `jj pr`, but the two are interchangeable.
+optionally, configure as an alias so you can use `jj pr` instead of `jj-pr`. The docs below will use `jj pr`, but the two are interchangeable.
 
-```toml
-
-[aliases]
-# ....
-# 
-pr = ["util", "exec", "--", 'jj-pr', "$@"]
-# or exec bun run jj-pr to use bun instead of node.
+```sh
+jj config set --user aliases.pr '["util", "exec", "--", "jj-pr"]'
+# or, to enable it for a single repo only:
+jj config set --repo aliases.pr '["util", "exec", "--", "jj-pr"]'
 ```
 
+or add it to your `jj` config file directly (`jj config edit --user`):
+
+```toml
+[aliases]
+pr = ["util", "exec", "--", "jj-pr"]
+```
 you can also configure a custom bookmark prefix in your `jj` config:
 
 ```toml

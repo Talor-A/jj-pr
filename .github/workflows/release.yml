@@ -3,6 +3,9 @@ name: Release
 on:
   push:
     branches: [main]
+  # Canary publishes only; the release job never runs on PRs. Lives in
+  # this file because npm's trusted publisher is pinned to release.yml.
+  pull_request:
   workflow_dispatch:
     inputs:
       bump:
@@ -11,19 +14,21 @@ on:
         options: [patch, minor, major]
         default: patch
 
-permissions:
-  contents: write
-
-concurrency:
-  group: release
-  cancel-in-progress: false
-
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
     # Skip release commits. Pushes made with GITHUB_TOKEN don't retrigger
     # workflows anyway; this also covers manual `npm version` pushes.
-    if: github.event_name == 'workflow_dispatch' || !startsWith(github.event.head_commit.message, 'release:')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       !startsWith(github.event.head_commit.message, 'release:'))
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,9 +63,11 @@ jobs:
 
       # Publish before pushing: if publish fails, nothing lands in git
       # and a rerun starts from the same version.
-      - run: bun publish --access public
-        env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # npm, not bun: bun publish doesn't support npm trusted publishing
+      # (OIDC), see oven-sh/bun#22423. Trusted publishing needs npm >= 11.5.1,
+      # hence npx (a global upgrade hits EACCES on /usr/local).
+      - name: Publish to npm
+        run: npx -y npm@latest publish --access public --provenance
 
       - name: Push release commit and tag
         run: git push origin main --follow-tags
@@ -69,3 +76,33 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${{ steps.bump.outputs.tag }}" --generate-notes
+
+  canary:
+    runs-on: ubuntu-latest
+    # Same-repo PRs only: fork PRs can't mint OIDC tokens, and publishing
+    # a canary is effectively release access.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: canary-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+
+      # typecheck/test already run on PRs via ci.yml; this job only
+      # exercises the publish pipeline.
+      - name: Publish canary to npm
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          version="$(jq -r .version package.json)-canary.${PR}.${HEAD_SHA:0:7}"
+          npm pkg set version="$version"
+          npx -y npm@latest publish --access public --tag canary --provenance=false
+          echo "Published \`jj-pr@${version}\` (dist-tag \`canary\`)" >> "$GITHUB_STEP_SUMMARY"
