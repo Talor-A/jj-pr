@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
   group: release
@@ -59,8 +60,6 @@ jobs:
       # Publish before pushing: if publish fails, nothing lands in git
       # and a rerun starts from the same version.
       - run: bun publish --access public
-        env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Push release commit and tag
         run: git push origin main --follow-tags
