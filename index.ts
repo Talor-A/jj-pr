@@ -515,7 +515,7 @@ async function prTitleAndBody(
   };
 }
 
-async function alignPRs(spinner: Ora, plans: PRPlan[], dryRun: boolean) {
+async function alignPRs(spinner: Ora, plans: PRPlan[]) {
   const prsByChange = new Map<string, { number: number; body: string }>();
 
   for (const plan of plans) {
@@ -526,8 +526,6 @@ async function alignPRs(spinner: Ora, plans: PRPlan[], dryRun: boolean) {
       });
       continue;
     }
-
-    if (dryRun) continue;
 
     const { action, headBookmark, baseBranch, existingPr, change } = plan;
 
@@ -596,7 +594,7 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
     }),
   );
 
-  const prInfo = await alignPRs(spinner, plan.prPlans, false);
+  const prInfo = await alignPRs(spinner, plan.prPlans);
 
   const stackMarkdown = renderStackMarkdown(
     stackEntriesForPlans(plan.prPlans, plan.changes).map((entry) => ({
@@ -609,7 +607,7 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
 
   spinner.text = "updating descriptions...";
 
-  await Promise.allSettled(
+  const results = await Promise.allSettled(
     plan.changes.map(async (change) => {
       const number = prInfo.get(change)?.number;
       if (number === undefined) {
@@ -629,6 +627,20 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
   );
 
   spinner.stop();
+
+  results.forEach((result, index) => {
+    if (result.status !== "rejected") return;
+    const change = plan.changes[index];
+    const number =
+      change === undefined ? undefined : prInfo.get(change)?.number;
+    const message =
+      result.reason instanceof Error
+        ? result.reason.message
+        : String(result.reason);
+    console.error(`failed to update description for PR #${number}: ${message}`);
+    process.exitCode = 1;
+  });
+
   console.log(stackMarkdown);
 }
 
