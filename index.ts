@@ -28,8 +28,10 @@ import {
   jjLogBookmarksCommand,
   mergeBookmarkResults,
   proposedBookmarkRevset,
+  renderStackMarkdown,
   type BookmarkResult,
   type BookmarkResultWithHead,
+  type StackEntry,
 } from "./lib/pr-stack";
 import {
   JJLogItemJsonSchema,
@@ -529,38 +531,6 @@ function plansToString(plans: PRPlan[]): string {
   return result;
 }
 
-type PlannedStackEntry =
-  | {
-      kind: "existing";
-      change: string;
-      headBookmark: string;
-      pr: PullRequest;
-    }
-  | {
-      kind: "new";
-      change: string;
-      headBookmark: string;
-    };
-
-function plannedStackEntries(plans: PRPlan[]): PlannedStackEntry[] {
-  return plans.map((plan) => {
-    if (plan.action === "create") {
-      return {
-        kind: "new",
-        change: plan.change,
-        headBookmark: plan.headBookmark,
-      };
-    }
-
-    return {
-      kind: "existing",
-      change: plan.change,
-      headBookmark: plan.headBookmark,
-      pr: plan.existingPr,
-    };
-  });
-}
-
 // Dry-run stand-in for the map alignPRs builds on a real run: the PRs that
 // already exist, keyed by change. Planned PRs have no number yet, so they are
 // absent here and only appear in the planned stack markdown.
@@ -568,46 +538,37 @@ function plannedPrInfo(
   plans: PRPlan[],
 ): Map<string, { number: number; body: string }> {
   return new Map(
-    plannedStackEntries(plans)
+    plans
       .filter(
-        (entry): entry is Extract<PlannedStackEntry, { kind: "existing" }> =>
-          entry.kind === "existing",
+        (plan): plan is PRPlanUpdate | PRPlanNoop => plan.action !== "create",
       )
-      .map((entry) => [
-        entry.change,
-        { number: entry.pr.number, body: entry.pr.body ?? "" },
+      .map((plan) => [
+        plan.change,
+        { number: plan.existingPr.number, body: plan.existingPr.body ?? "" },
       ]),
   );
 }
 
-function plannedStackMarkdown(
+// Stack entries in `changes` order (oldest first). Plans for changes with an
+// existing PR carry its number; planned-but-uncreated PRs have none.
+function stackEntriesForPlans(
   plans: PRPlan[],
   changes: string[],
-  trunk: string,
-  nameWithOwner: string,
-): string {
-  const entriesByChange = new Map(
-    plannedStackEntries(plans).map((entry) => [entry.change, entry]),
-  );
-  const stackLines = ["## PR Stack"];
-  for (const change of [...changes].reverse()) {
-    const entry = entriesByChange.get(change);
-    if (entry === undefined) {
-      continue;
+): StackEntry[] {
+  const plansByChange = new Map(plans.map((plan) => [plan.change, plan]));
+  return changes.flatMap((change) => {
+    const plan = plansByChange.get(change);
+    if (plan === undefined) {
+      return [];
     }
-
-    if (entry.kind === "existing") {
-      stackLines.push(
-        `- https://github.com/${nameWithOwner}/pull/${entry.pr.number}`,
-      );
-      continue;
-    }
-
-    stackLines.push(`- [new PR] ${entry.headBookmark}`);
-  }
-  stackLines.push(`- \`${trunk}\``);
-
-  return `${stackLines.join("\n")}\n`;
+    return [
+      {
+        change,
+        headBookmark: plan.headBookmark,
+        prNumber: plan.existingPr?.number,
+      },
+    ];
+  });
 }
 
 // `gh pr create --fill` derives the title/body from local git commits, which
@@ -839,21 +800,17 @@ export async function main(spinner: Ora, args: CliArgs) {
     `gh repo view --json nameWithOwner`,
   );
 
+  const stackEntries = stackEntriesForPlans(plans, changes);
   const stackMarkdown = args.dryRun
-    ? plannedStackMarkdown(plans, changes, trunk, repo.nameWithOwner)
-    : (() => {
-        const stackLines = ["## PR Stack"];
-        for (const change of [...changes].reverse()) {
-          const number = prInfo.get(change)?.number;
-          if (number !== undefined) {
-            stackLines.push(
-              `- https://github.com/${repo.nameWithOwner}/pull/${number}`,
-            );
-          }
-        }
-        stackLines.push(`- \`${trunk}\``);
-        return `${stackLines.join("\n")}\n`;
-      })();
+    ? renderStackMarkdown(stackEntries, trunk, repo.nameWithOwner)
+    : renderStackMarkdown(
+        stackEntries.map((entry) => ({
+          ...entry,
+          prNumber: prInfo.get(entry.change)?.number,
+        })),
+        trunk,
+        repo.nameWithOwner,
+      );
   const descriptionPrInfo = args.dryRun ? plannedPrInfo(plans) : prInfo;
   spinner.stop();
 
