@@ -523,6 +523,87 @@ function plansToString(plans: PRPlan[]): string {
   return result;
 }
 
+type PlannedStackEntry =
+  | {
+      kind: "existing";
+      change: string;
+      headBookmark: string;
+      pr: PullRequest;
+    }
+  | {
+      kind: "new";
+      change: string;
+      headBookmark: string;
+    };
+
+function plannedStackEntries(plans: PRPlan[]): PlannedStackEntry[] {
+  return plans.map((plan) => {
+    if (plan.action === "create") {
+      return {
+        kind: "new",
+        change: plan.change,
+        headBookmark: plan.headBookmark,
+      };
+    }
+
+    return {
+      kind: "existing",
+      change: plan.change,
+      headBookmark: plan.headBookmark,
+      pr: plan.existingPr,
+    };
+  });
+}
+
+// Dry-run stand-in for the map alignPRs builds on a real run: the PRs that
+// already exist, keyed by change. Planned PRs have no number yet, so they are
+// absent here and only appear in the planned stack markdown.
+function plannedPrInfo(
+  plans: PRPlan[],
+): Map<string, { number: number; body: string }> {
+  return new Map(
+    plannedStackEntries(plans)
+      .filter(
+        (entry): entry is Extract<PlannedStackEntry, { kind: "existing" }> =>
+          entry.kind === "existing",
+      )
+      .map((entry) => [
+        entry.change,
+        { number: entry.pr.number, body: entry.pr.body ?? "" },
+      ]),
+  );
+}
+
+function plannedStackMarkdown(
+  plans: PRPlan[],
+  changes: string[],
+  trunk: string,
+  nameWithOwner: string,
+): string {
+  const entriesByChange = new Map(
+    plannedStackEntries(plans).map((entry) => [entry.change, entry]),
+  );
+  const stackLines = ["## PR Stack"];
+  for (const change of [...changes].reverse()) {
+    const entry = entriesByChange.get(change);
+    if (entry === undefined) {
+      continue;
+    }
+
+    if (entry.kind === "existing") {
+      stackLines.push(
+        `- https://github.com/${nameWithOwner}/pull/${entry.pr.number}`,
+      );
+      continue;
+    }
+
+    stackLines.push(`- [new PR] ${entry.headBookmark}`);
+  }
+  stackLines.push(`- \`${trunk}\``);
+
+  return `${stackLines.join("\n")}\n`;
+}
+
 async function alignPRs(spinner: Ora, plans: PRPlan[], dryRun: boolean) {
   const prsByChange = new Map<string, { number: number; body: string }>();
 
@@ -713,18 +794,22 @@ export async function main(spinner: Ora, args: CliArgs) {
     `gh repo view --json nameWithOwner`,
   );
 
-  const stackLines = ["## PR Stack"];
-  for (const change of [...changes].reverse()) {
-    const number = prInfo.get(change)?.number;
-    if (number !== undefined) {
-      stackLines.push(
-        `- https://github.com/${repo.nameWithOwner}/pull/${number}`,
-      );
-    }
-  }
-  stackLines.push(`- \`${trunk}\``);
-
-  const stackMarkdown = `${stackLines.join("\n")}\n`;
+  const stackMarkdown = args.dryRun
+    ? plannedStackMarkdown(plans, changes, trunk, repo.nameWithOwner)
+    : (() => {
+        const stackLines = ["## PR Stack"];
+        for (const change of [...changes].reverse()) {
+          const number = prInfo.get(change)?.number;
+          if (number !== undefined) {
+            stackLines.push(
+              `- https://github.com/${repo.nameWithOwner}/pull/${number}`,
+            );
+          }
+        }
+        stackLines.push(`- \`${trunk}\``);
+        return `${stackLines.join("\n")}\n`;
+      })();
+  const descriptionPrInfo = args.dryRun ? plannedPrInfo(plans) : prInfo;
   spinner.stop();
 
   spinner.text = "updating descriptions...";
@@ -732,7 +817,7 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   await Promise.allSettled(
     changes.map(async (change) => {
-      const number = prInfo.get(change)?.number;
+      const number = descriptionPrInfo.get(change)?.number;
       if (number === undefined) {
         return;
       }
