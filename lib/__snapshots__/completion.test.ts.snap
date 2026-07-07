@@ -6,7 +6,7 @@ exports[`completion bash script matches snapshot 1`] = `
 #      or: jj-pr completion bash >> ~/.bashrc
 _jj_pr() {
   local cur="\${COMP_WORDS[COMP_CWORD]}"
-  COMPREPLY=( $(compgen -W "--revision --dry-run --help" -- "\${cur}") )
+  COMPREPLY=( $(compgen -W "--revision --dry-run --help --version" -- "\${cur}") )
   return 0
 }
 complete -F _jj_pr jj-pr
@@ -21,7 +21,8 @@ _jj-pr() {
   _arguments \\
     '(-r --revision)'{-r,--revision}'[Revision to process]:revset:' \\
     '--dry-run[Preview changes without applying them]' \\
-    '(-h --help)'{-h,--help}'[Show help message]'
+    '(-h --help)'{-h,--help}'[Show help message]' \\
+    '(-v --version)'{-v,--version}'[Show version number]'
 }
 _jj-pr "$@"
 "
@@ -33,5 +34,6 @@ exports[`completion fish script matches snapshot 1`] = `
 complete -c jj-pr -s r -l revision -d 'Revision to process' -r
 complete -c jj-pr -l dry-run -d 'Preview changes without applying them'
 complete -c jj-pr -s h -l help -d 'Show help message'
+complete -c jj-pr -s v -l version -d 'Show version number'
 "
 `;

@@ -5,6 +5,7 @@ const CliSchema = z.object({
   revision: z.string().default("closest_pushable(@)"),
   dryRun: z.boolean().default(false),
   help: z.boolean().default(false),
+  version: z.boolean().default(false),
   rebase: z.boolean().default(false),
 });
 
@@ -24,6 +25,7 @@ Options:
       --dry-run         Preview changes without applying them
       --rebase          [experimental] Rebase the stack before pushing
   -h, --help            Show this help message
+  -v, --version         Show version number
 
 Commands:
   completion <shell>    Print shell completion script (bash, zsh, or fish)
@@ -36,6 +38,7 @@ export function parseCli(argv: string[]) {
     options: {
       "dry-run": { type: "boolean" },
       help: { type: "boolean", short: "h" },
+      version: { type: "boolean", short: "v" },
       revision: { type: "string", short: "r" },
       rebase: { type: "boolean" },
     },
@@ -50,6 +53,7 @@ export function parseCli(argv: string[]) {
     revision: positionals[0] ?? values.revision,
     dryRun: values["dry-run"],
     help: values.help,
+    version: values.version,
     rebase: values.rebase,
   });
 }
