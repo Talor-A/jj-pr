@@ -34,6 +34,7 @@ import {
 } from "./lib/pr-stack";
 import {
   JJLogItemJsonSchema,
+  OpenPullRequestListSchema,
   PullRequestListSchema,
   PullRequestSchema,
   RepoSchema,
@@ -180,21 +181,24 @@ function cachePr(pr: PullRequest, head?: string): PullRequest {
   return pr;
 }
 
-async function prForHead(head: string): Promise<PullRequest | undefined> {
-  if (prsByHead.has(head)) {
-    return prsByHead.get(head);
-  }
+// Pure cache lookup: prefetchOpenPrs fills prsByHead once per run, so
+// planning never issues a per-head `gh pr list --head` round-trip.
+function prForHead(head: string): PullRequest | undefined {
+  return prsByHead.get(head);
+}
 
-  const existingPrs = await execToSchema(
-    PullRequestListSchema,
-    `gh pr list --head ${head} --json number,title,baseRefName,body`,
+// One repo-wide listing replaces the per-head queries prForHead used to make.
+async function prefetchOpenPrs(): Promise<void> {
+  const openPrs = await execToSchema(
+    OpenPullRequestListSchema,
+    `gh pr list --json number,title,baseRefName,body,headRefName --limit 500`,
   );
-
-  if (existingPrs[0]) {
-    cachePr(existingPrs[0], head);
+  if (openPrs.length === 500) {
+    console.error(
+      "gh pr list hit the 500-PR limit; stacked-PR detection may be incomplete",
+    );
   }
-
-  return existingPrs[0];
+  for (const { headRefName, ...pr } of openPrs) cachePr(pr, headRefName);
 }
 
 async function prForNumber(number: number): Promise<PullRequest> {
@@ -218,7 +222,7 @@ async function preferredBookmarkHead(change: string): Promise<{
   const bookmarkHeads = await memoizedBookmarkHeadsForChange(change);
 
   for (const head of bookmarkHeads) {
-    const existingPr = await prForHead(head);
+    const existingPr = prForHead(head);
     if (existingPr) {
       return { head, existingPr };
     }
@@ -385,7 +389,7 @@ async function preferredProposedBookmarkHead(
   );
 
   for (const head of bookmarkHeads) {
-    const existingPr = await prForHead(head);
+    const existingPr = prForHead(head);
     if (existingPr) {
       return { head, existingPr };
     }
@@ -801,6 +805,8 @@ export async function main(spinner: Ora, args: CliArgs) {
     spinner.stopAndPersist();
     process.exit(0);
   }
+
+  await prefetchOpenPrs();
 
   const bookmarkResults = await getBookmarksAndPRsForChanges(changes);
   const newBookmarks = await prepareNewBookmarks(

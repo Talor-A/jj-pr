@@ -32,6 +32,10 @@ function prJson(pr: FakePullRequest) {
   };
 }
 
+function prJsonWithHead(pr: FakePullRequest) {
+  return { ...prJson(pr), headRefName: pr.head };
+}
+
 const statePath = process.env.FAKE_GH_STATE;
 if (!statePath) throw new Error("FAKE_GH_STATE is required");
 
@@ -70,10 +74,14 @@ if (args[0] === "repo" && args[1] === "view") {
 }
 
 if (args[0] === "pr" && args[1] === "list") {
-  const head = getOption(args, "--head");
-  console.log(
-    JSON.stringify(state.prs.filter((pr) => pr.head === head).map(prJson)),
-  );
+  if (args.includes("--head")) {
+    const head = getOption(args, "--head");
+    console.log(
+      JSON.stringify(state.prs.filter((pr) => pr.head === head).map(prJson)),
+    );
+    process.exit(0);
+  }
+  console.log(JSON.stringify(state.prs.map(prJsonWithHead)));
   process.exit(0);
 }
 

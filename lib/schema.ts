@@ -28,6 +28,18 @@ export const PullRequestListSchema = z.preprocess(
   parseJsonPreprocessor,
   z.array(PullRequestSchema),
 );
+export const OpenPullRequestListSchema = z.preprocess(
+  parseJsonPreprocessor,
+  z.array(
+    z.object({
+      number: z.number(),
+      title: z.string(),
+      baseRefName: z.string(),
+      body: z.string().nullable(),
+      headRefName: z.string(),
+    }),
+  ),
+);
 export const RepoSchema = z.preprocess(
   parseJsonPreprocessor,
   z.object({ nameWithOwner: z.string() }),
