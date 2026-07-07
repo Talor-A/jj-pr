@@ -42,7 +42,20 @@ import {
 import pkg from "./package.json";
 
 import { jj, jjCommand, jjStdoutLines } from "./lib/jj";
-import { lines, unique } from "./lib/utils";
+import { lines, parseJsonLines, unique } from "./lib/utils";
+
+type JJLogItem = z.infer<typeof JJLogItemJsonSchema>;
+
+function requireChangeMetadata(
+  metadataByChange: Map<string, JJLogItem>,
+  change: string,
+): JJLogItem {
+  const item = metadataByChange.get(change);
+  if (item === undefined) {
+    throw new Error(`Missing jj metadata for change ${change}`);
+  }
+  return item;
+}
 
 let _bookmarkPrefix: string | undefined;
 // Resolved bookmark prefix for newly-created bookmarks. Prefers the
@@ -288,22 +301,16 @@ function uniqueBookmarkName(base: string, taken: Set<string>): string {
 
 async function prepareNewBookmarks(
   bookmarksAndPRs: BookmarkResult[],
+  metadataByChange: Map<string, JJLogItem>,
 ): Promise<BookmarkResultWithHead[]> {
   const bookmarkPrefix = await getBookmarkPrefix();
   const taken = await takenBookmarkNames();
-  const withDescriptions = await Promise.all(
-    bookmarksAndPRs
-      .filter((change) => !change.headBookmark)
-      .map(async (item) => ({
-        item,
-        changeitem: await execToSchema(
-          JJLogItemJsonSchema,
-          jjCommand(
-            `log -r ${shellQuote(item.change)} --no-graph -T 'json(self)'`,
-          ),
-        ),
-      })),
-  );
+  const withDescriptions = bookmarksAndPRs
+    .filter((change) => !change.headBookmark)
+    .map((item) => ({
+      item,
+      changeitem: requireChangeMetadata(metadataByChange, item.change),
+    }));
 
   // Names are reserved sequentially in stack order: a slug that collides
   // with an existing bookmark (local or remote) or with an earlier planned
@@ -500,14 +507,12 @@ function stackEntriesForPlans(
 // `gh pr create --fill` derives the title/body from local git commits, which
 // don't exist in a non-colocated workspace (jj only auto-exports bookmarks to
 // git refs in colocated checkouts). Build them from the jj description instead.
-async function prTitleAndBody(
+function prTitleAndBody(
   change: string,
   fallbackTitle: string,
-): Promise<{ title: string; body: string }> {
-  const item = await execToSchema(
-    JJLogItemJsonSchema,
-    jjCommand(`log -r ${shellQuote(change)} --no-graph -T 'json(self)'`),
-  );
+  metadataByChange: Map<string, JJLogItem>,
+): { title: string; body: string } {
+  const item = requireChangeMetadata(metadataByChange, change);
   const [summary = "", ...rest] = item.description.split(/\r?\n/);
   return {
     title: summary.trim() || fallbackTitle,
@@ -515,7 +520,11 @@ async function prTitleAndBody(
   };
 }
 
-async function alignPRs(spinner: Ora, plans: PRPlan[]) {
+async function alignPRs(
+  spinner: Ora,
+  plans: PRPlan[],
+  metadataByChange: Map<string, JJLogItem>,
+) {
   const prsByChange = new Map<string, { number: number; body: string }>();
 
   for (const plan of plans) {
@@ -543,7 +552,11 @@ async function alignPRs(spinner: Ora, plans: PRPlan[]) {
 
     if (action === "create") {
       spinner.text = `creating new PR for ${headBookmark}...`;
-      const { title, body } = await prTitleAndBody(change, headBookmark);
+      const { title, body } = prTitleAndBody(
+        change,
+        headBookmark,
+        metadataByChange,
+      );
       await execWithStdin(
         `gh pr create --head ${headBookmark} --base ${baseBranch} --draft --title ${shellQuote(title)} --body-file -`,
         body,
@@ -575,6 +588,7 @@ interface ExecutionPlan {
   newBookmarks: BookmarkResultWithHead[]; // named but NOT yet pushed (new: true)
   prPlans: PRPlan[];
   changes: string[]; // oldest-first change ids
+  changeMetadata: Map<string, JJLogItem>; // keyed by change id, covers `changes`
   trunk: string;
   nameWithOwner: string;
 }
@@ -594,7 +608,7 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
     }),
   );
 
-  const prInfo = await alignPRs(spinner, plan.prPlans);
+  const prInfo = await alignPRs(spinner, plan.prPlans, plan.changeMetadata);
 
   const stackMarkdown = renderStackMarkdown(
     stackEntriesForPlans(plan.prPlans, plan.changes).map((entry) => ({
@@ -745,8 +759,15 @@ export async function main(spinner: Ora, args: CliArgs) {
   const pushPreview = await planPush(revset);
 
   spinner.text = "gathering changes...";
-  const changes = await jjStdoutLines(
-    `log --no-graph --reversed -r '(${revset}) & mutable()' -T 'change_id ++ "\n"'`,
+  const changeItems = parseJsonLines(
+    JJLogItemJsonSchema,
+    await jj(
+      `log --no-graph --reversed -r '(${revset}) & mutable()' -T 'json(self) ++ "\n"'`,
+    ).then(mapToStdout),
+  );
+  const changes = changeItems.map((item) => item.change_id);
+  const changeMetadata = new Map(
+    changeItems.map((item) => [item.change_id, item]),
   );
 
   if (!changes.length) {
@@ -756,7 +777,10 @@ export async function main(spinner: Ora, args: CliArgs) {
   }
 
   const bookmarkResults = await getBookmarksAndPRsForChanges(changes);
-  const newBookmarks = await prepareNewBookmarks(bookmarkResults);
+  const newBookmarks = await prepareNewBookmarks(
+    bookmarkResults,
+    changeMetadata,
+  );
   const bookmarksAndPRs = mergeBookmarkResults(bookmarkResults, newBookmarks);
 
   spinner.text = "planning pr changes...";
@@ -778,6 +802,7 @@ export async function main(spinner: Ora, args: CliArgs) {
     newBookmarks,
     prPlans,
     changes,
+    changeMetadata,
     trunk,
     nameWithOwner: repo.nameWithOwner,
   };
