@@ -38,10 +38,10 @@ import {
   RepoSchema,
   type PullRequest,
 } from "./lib/schema";
-import { PROD_JJ_CONFIG } from "./lib/config";
 import pkg from "./package.json";
 
-const jjconf = PROD_JJ_CONFIG;
+import { jj, jjCommand, jjStdoutLines } from "./lib/jj";
+import { lines, unique } from "./lib/utils";
 
 let _bookmarkPrefix: string | undefined;
 // Resolved bookmark prefix for newly-created bookmarks. Prefers the
@@ -50,16 +50,14 @@ let _bookmarkPrefix: string | undefined;
 async function getBookmarkPrefix(): Promise<string> {
   if (_bookmarkPrefix !== undefined) return _bookmarkPrefix;
 
-  const configured = await exec(
-    `jj --config-file ${jjconf} config get jj-pr.bookmark-prefix`,
-  )
+  const configured = await jj(`config get jj-pr.bookmark-prefix`)
     .then(mapToStdout)
     .then((s) => s.trim())
     .catch(() => ""); // key unset -> jj exits non-zero
 
   let prefix = configured;
   if (!prefix) {
-    const email = await exec(`jj --config-file ${jjconf} config get user.email`)
+    const email = await jj(`config get user.email`)
       .then(mapToStdout)
       .then((s) => s.trim())
       .catch(() => "");
@@ -98,14 +96,6 @@ async function confirm(
   return /^[Yy]/.test(reply);
 }
 
-function lines(value: string): string[] {
-  return value.split(/\r?\n/).filter((line) => line.length > 0);
-}
-
-function unique(values: string[]): string[] {
-  return [...new Set(values)];
-}
-
 export function bodyWithoutPrStack(body: string): string {
   // GitHub returns PR bodies with CRLF line endings, but we author them with
   // LF. Normalize first so the pattern matches on round-trips; otherwise the
@@ -126,19 +116,15 @@ export function bookmarkHead(bookmark: string): string {
 export async function bookmarkHeadsForChange(
   change: string,
 ): Promise<string[]> {
-  const bookmarks = lines(
-    (await exec(jjLogBookmarksCommand(change))).stdout,
-  );
+  const bookmarks = lines((await exec(jjLogBookmarksCommand(change))).stdout);
 
   return unique(bookmarks.map(bookmarkHead));
 }
 
 async function localBookmarkHeadsForChange(change: string): Promise<string[]> {
   return unique(
-    lines(
-      await exec(
-        `jj --config-file ${jjconf} log -r ${shellQuote(change)} --no-graph -T 'local_bookmarks.map(|b| b.name()).join("\\n") ++ "\\n"'`,
-      ).then(mapToStdout),
+    await jjStdoutLines(
+      `log -r ${shellQuote(change)} --no-graph -T 'local_bookmarks.map(|b| b.name()).join("\\n") ++ "\\n"'`,
     ),
   );
 }
@@ -228,9 +214,7 @@ async function handlePush(spinner: Ora, revset: string, dryRun: boolean) {
   spinner.start();
   spinner.text = "planning push...";
 
-  const dryRunOutput = await exec(
-    `jj --config-file ${jjconf} git push --dry-run -r '${revset}'`,
-  )
+  const dryRunOutput = await jj(`git push --dry-run -r '${revset}'`)
     .then(combineStdoutAndStderr)
     .then((str) => str.trim());
 
@@ -254,13 +238,11 @@ async function handlePush(spinner: Ora, revset: string, dryRun: boolean) {
 
   spinner.text = "pushing...";
   spinner.start();
-  await exec(`jj --config-file ${jjconf} git push -r '${revset}'`);
+  await jj(`git push -r '${revset}'`);
 }
 
 async function ensureTrunk(): Promise<string> {
-  const trunk = await exec(
-    `jj --config-file ${jjconf} bookmark list -r 'trunk()' -T 'name ++ "\n"'`,
-  )
+  const trunk = await jj(`bookmark list -r 'trunk()' -T 'name ++ "\n"'`)
     .then(mapToStdout)
     .then((x) => x.trim())
     .then(lines);
@@ -283,13 +265,11 @@ async function handleFix(spinner: Ora, revset: string, dryRun: boolean) {
   spinner.start();
   spinner.text = "";
 
-  const hasFixTools = await succeeds(
-    `jj --config-file ${jjconf} config get fix.tools`,
-  );
+  const hasFixTools = await succeeds(jjCommand(`config get fix.tools`));
 
   if (hasFixTools) {
     spinner.text = "fixing...";
-    await exec(`jj --config-file ${jjconf} fix -s '(${revset}) & mutable()'`);
+    await jj(`fix -s '(${revset}) & mutable()'`);
   }
 }
 
@@ -313,11 +293,7 @@ async function getBookmarksAndPRsForChanges(
 
 async function takenBookmarkNames(): Promise<Set<string>> {
   return new Set(
-    lines(
-      await exec(
-        `jj --config-file ${jjconf} bookmark list --all-remotes -T 'name ++ "\\n"'`,
-      ).then(mapToStdout),
-    ),
+    await jjStdoutLines(`bookmark list --all-remotes -T 'name ++ "\\n"'`),
   );
 }
 
@@ -342,7 +318,9 @@ async function prepareNewBookmarks(
         item,
         changeitem: await execToSchema(
           JJLogItemJsonSchema,
-          `jj --config-file ${jjconf} log -r ${shellQuote(item.change)} --no-graph -T 'json(self)'`,
+          jjCommand(
+            `log -r ${shellQuote(item.change)} --no-graph -T 'json(self)'`,
+          ),
         ),
       })),
   );
@@ -370,7 +348,8 @@ async function approveAndPushNewBookmarks(
 ): Promise<BookmarkResultWithHead[]> {
   const changesNeedingBookmarks = await prepareNewBookmarks(bookmarksAndPRs);
   const newBookmarks = changesNeedingBookmarks.map((b) => b.headBookmark);
-  if (newBookmarks.length === 0) return existingBookmarkResults(bookmarksAndPRs);
+  if (newBookmarks.length === 0)
+    return existingBookmarkResults(bookmarksAndPRs);
   spinner.stop();
   console.log(`New bookmarks:\n${newBookmarks.join("\n")}`);
 
@@ -388,9 +367,7 @@ async function approveAndPushNewBookmarks(
     changesNeedingBookmarks.map(async ({ headBookmark, change }) => {
       spinner.text = `pushing ${headBookmark}...`;
       approvedNewBookmarks.add(headBookmark);
-      await exec(
-        `jj --config-file ${jjconf} git push --named ${headBookmark}=${change}`,
-      );
+      await jj(`git push --named ${headBookmark}=${change}`);
     }),
   );
 
@@ -409,12 +386,10 @@ async function preferredProposedBookmarkHead(
       .filter((item) => item.new)
       .map((item) => [item.change, item.headBookmark]),
   );
-  const closestBookmarkChanges = lines(
-    await exec(
-      `jj --config-file ${jjconf} log --no-graph -r ${shellQuote(
-        `heads(trunk()..${change}- & ${proposedBookmarkRevset(bookmarksAndPRs)})`,
-      )} -T 'change_id ++ "\n"'`,
-    ).then(mapToStdout),
+  const closestBookmarkChanges = await jjStdoutLines(
+    `log --no-graph -r ${shellQuote(
+      `heads(trunk()..${change}- & ${proposedBookmarkRevset(bookmarksAndPRs)})`,
+    )} -T 'change_id ++ "\n"'`,
   );
 
   const bookmarkHeads = unique(
@@ -644,7 +619,7 @@ async function prTitleAndBody(
 ): Promise<{ title: string; body: string }> {
   const item = await execToSchema(
     JJLogItemJsonSchema,
-    `jj --config-file ${jjconf} log -r ${shellQuote(change)} --no-graph -T 'json(self)'`,
+    jjCommand(`log -r ${shellQuote(change)} --no-graph -T 'json(self)'`),
   );
   const [summary = "", ...rest] = item.description.split(/\r?\n/);
   return {
@@ -771,11 +746,9 @@ async function doRebase(spinner: Ora, dryRun: boolean, gitDir: string) {
 // heads, which silently drops explicitly selected revisions; resolving to
 // concrete change ids first and expanding each one preserves them all.
 async function constructRevsetForRevision(revision: string): Promise<string> {
-  const revisions = await exec(
-    `jj --config-file ${jjconf} log --no-graph --reversed -r ${shellQuote(revision)} -T 'change_id ++ "\n"'`,
-  )
-    .then(mapToStdout)
-    .then(lines);
+  const revisions = await jjStdoutLines(
+    `log --no-graph --reversed -r ${shellQuote(revision)} -T 'change_id ++ "\n"'`,
+  );
 
   if (revisions.length === 0) {
     return "";
@@ -807,11 +780,9 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   spinner.start();
   spinner.text = "gathering changes...";
-  const changes = await exec(
-    `jj --config-file ${jjconf} log --no-graph --reversed -r '(${revset}) & mutable()' -T 'change_id ++ "\n"'`,
-  )
-    .then(mapToStdout)
-    .then(lines);
+  const changes = await jjStdoutLines(
+    `log --no-graph --reversed -r '(${revset}) & mutable()' -T 'change_id ++ "\n"'`,
+  );
 
   if (!changes.length) {
     spinner.text = "nothing to do.";
