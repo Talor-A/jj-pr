@@ -24,12 +24,13 @@ import {
 } from "./lib/rebase-stacks-after-fetch";
 import { absoluteGitDir, loadRebaseState } from "./lib/rebase-state";
 import {
-  existingBookmarkResults,
   jjLogBookmarksCommand,
   mergeBookmarkResults,
   proposedBookmarkRevset,
+  renderStackMarkdown,
   type BookmarkResult,
   type BookmarkResultWithHead,
+  type StackEntry,
 } from "./lib/pr-stack";
 import {
   JJLogItemJsonSchema,
@@ -210,35 +211,14 @@ function sanitizeBookmarkDescription(
   return slug || fallback;
 }
 
-async function handlePush(spinner: Ora, revset: string, dryRun: boolean) {
-  spinner.start();
-  spinner.text = "planning push...";
-
-  const dryRunOutput = await jj(`git push --dry-run -r '${revset}'`)
+// Gather half: read-only. Returns the human-readable push preview, or null
+// when jj reports nothing to push. Strips jj's dry-run disclaimer line.
+async function planPush(revset: string): Promise<string | null> {
+  const output = await jj(`git push --dry-run -r '${revset}'`)
     .then(combineStdoutAndStderr)
-    .then((str) => str.trim());
-
-  if (dryRunOutput.trim().endsWith("Nothing changed.")) {
-    return;
-  }
-  spinner.stop();
-
-  if (dryRun) {
-    console.log(dryRunOutput);
-    return;
-  }
-  console.log(dryRunOutput.replace("\nDry-run requested, not pushing.", ""));
-
-  const confirmed = await confirm("\npush these bookmarks? (⏎ / n)");
-
-  if (!confirmed) {
-    console.log("Aborted.");
-    process.exit(1);
-  }
-
-  spinner.text = "pushing...";
-  spinner.start();
-  await jj(`git push -r '${revset}'`);
+    .then((s) => s.trim());
+  if (output.endsWith("Nothing changed.")) return null;
+  return output.replace("\nDry-run requested, not pushing.", "");
 }
 
 async function ensureTrunk(): Promise<string> {
@@ -338,40 +318,6 @@ async function prepareNewBookmarks(
     ),
     new: true as const,
   }));
-}
-
-async function approveAndPushNewBookmarks(
-  spinner: Ora,
-  dryRun: boolean,
-  bookmarksAndPRs: BookmarkResult[],
-  approvedNewBookmarks: Set<string>,
-): Promise<BookmarkResultWithHead[]> {
-  const changesNeedingBookmarks = await prepareNewBookmarks(bookmarksAndPRs);
-  const newBookmarks = changesNeedingBookmarks.map((b) => b.headBookmark);
-  if (newBookmarks.length === 0)
-    return existingBookmarkResults(bookmarksAndPRs);
-  spinner.stop();
-  console.log(`New bookmarks:\n${newBookmarks.join("\n")}`);
-
-  if (dryRun) {
-    // Don't push, but keep the planned bookmarks so the rest of the dry run
-    // can report the PRs they would produce.
-    return mergeBookmarkResults(bookmarksAndPRs, changesNeedingBookmarks);
-  }
-  const shouldPush = await confirm("push new bookmarks? (⏎ / n)");
-  if (!shouldPush) {
-    process.exit(0);
-  }
-  spinner.start();
-  await Promise.all(
-    changesNeedingBookmarks.map(async ({ headBookmark, change }) => {
-      spinner.text = `pushing ${headBookmark}...`;
-      approvedNewBookmarks.add(headBookmark);
-      await jj(`git push --named ${headBookmark}=${change}`);
-    }),
-  );
-
-  return mergeBookmarkResults(bookmarksAndPRs, changesNeedingBookmarks);
 }
 
 async function preferredProposedBookmarkHead(
@@ -529,85 +475,26 @@ function plansToString(plans: PRPlan[]): string {
   return result;
 }
 
-type PlannedStackEntry =
-  | {
-      kind: "existing";
-      change: string;
-      headBookmark: string;
-      pr: PullRequest;
-    }
-  | {
-      kind: "new";
-      change: string;
-      headBookmark: string;
-    };
-
-function plannedStackEntries(plans: PRPlan[]): PlannedStackEntry[] {
-  return plans.map((plan) => {
-    if (plan.action === "create") {
-      return {
-        kind: "new",
-        change: plan.change,
-        headBookmark: plan.headBookmark,
-      };
-    }
-
-    return {
-      kind: "existing",
-      change: plan.change,
-      headBookmark: plan.headBookmark,
-      pr: plan.existingPr,
-    };
-  });
-}
-
-// Dry-run stand-in for the map alignPRs builds on a real run: the PRs that
-// already exist, keyed by change. Planned PRs have no number yet, so they are
-// absent here and only appear in the planned stack markdown.
-function plannedPrInfo(
-  plans: PRPlan[],
-): Map<string, { number: number; body: string }> {
-  return new Map(
-    plannedStackEntries(plans)
-      .filter(
-        (entry): entry is Extract<PlannedStackEntry, { kind: "existing" }> =>
-          entry.kind === "existing",
-      )
-      .map((entry) => [
-        entry.change,
-        { number: entry.pr.number, body: entry.pr.body ?? "" },
-      ]),
-  );
-}
-
-function plannedStackMarkdown(
+// Stack entries in `changes` order (oldest first). Plans for changes with an
+// existing PR carry its number; planned-but-uncreated PRs have none.
+function stackEntriesForPlans(
   plans: PRPlan[],
   changes: string[],
-  trunk: string,
-  nameWithOwner: string,
-): string {
-  const entriesByChange = new Map(
-    plannedStackEntries(plans).map((entry) => [entry.change, entry]),
-  );
-  const stackLines = ["## PR Stack"];
-  for (const change of [...changes].reverse()) {
-    const entry = entriesByChange.get(change);
-    if (entry === undefined) {
-      continue;
+): StackEntry[] {
+  const plansByChange = new Map(plans.map((plan) => [plan.change, plan]));
+  return changes.flatMap((change) => {
+    const plan = plansByChange.get(change);
+    if (plan === undefined) {
+      return [];
     }
-
-    if (entry.kind === "existing") {
-      stackLines.push(
-        `- https://github.com/${nameWithOwner}/pull/${entry.pr.number}`,
-      );
-      continue;
-    }
-
-    stackLines.push(`- [new PR] ${entry.headBookmark}`);
-  }
-  stackLines.push(`- \`${trunk}\``);
-
-  return `${stackLines.join("\n")}\n`;
+    return [
+      {
+        change,
+        headBookmark: plan.headBookmark,
+        prNumber: plan.existingPr?.number,
+      },
+    ];
+  });
 }
 
 // `gh pr create --fill` derives the title/body from local git commits, which
@@ -628,7 +515,7 @@ async function prTitleAndBody(
   };
 }
 
-async function alignPRs(spinner: Ora, plans: PRPlan[], dryRun: boolean) {
+async function alignPRs(spinner: Ora, plans: PRPlan[]) {
   const prsByChange = new Map<string, { number: number; body: string }>();
 
   for (const plan of plans) {
@@ -639,8 +526,6 @@ async function alignPRs(spinner: Ora, plans: PRPlan[], dryRun: boolean) {
       });
       continue;
     }
-
-    if (dryRun) continue;
 
     const { action, headBookmark, baseBranch, existingPr, change } = plan;
 
@@ -680,6 +565,83 @@ async function alignPRs(spinner: Ora, plans: PRPlan[], dryRun: boolean) {
     }
   }
   return prsByChange;
+}
+
+// Everything a run would do, gathered read-only so it can be rendered and
+// confirmed as a whole before anything mutates.
+interface ExecutionPlan {
+  revset: string;
+  pushPreview: string | null; // from planPush
+  newBookmarks: BookmarkResultWithHead[]; // named but NOT yet pushed (new: true)
+  prPlans: PRPlan[];
+  changes: string[]; // oldest-first change ids
+  trunk: string;
+  nameWithOwner: string;
+}
+
+async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
+  spinner.start();
+
+  if (plan.pushPreview !== null) {
+    spinner.text = "pushing...";
+    await jj(`git push -r '${plan.revset}'`);
+  }
+
+  await Promise.all(
+    plan.newBookmarks.map(async ({ headBookmark, change }) => {
+      spinner.text = `pushing ${headBookmark}...`;
+      await jj(`git push --named ${headBookmark}=${change}`);
+    }),
+  );
+
+  const prInfo = await alignPRs(spinner, plan.prPlans);
+
+  const stackMarkdown = renderStackMarkdown(
+    stackEntriesForPlans(plan.prPlans, plan.changes).map((entry) => ({
+      ...entry,
+      prNumber: prInfo.get(entry.change)?.number,
+    })),
+    plan.trunk,
+    plan.nameWithOwner,
+  );
+
+  spinner.text = "updating descriptions...";
+
+  const results = await Promise.allSettled(
+    plan.changes.map(async (change) => {
+      const number = prInfo.get(change)?.number;
+      if (number === undefined) {
+        return;
+      }
+
+      const current = await prForNumber(number);
+      const currentBody = current.body ?? "";
+      const newBody = `${bodyWithoutPrStack(currentBody)}${stackMarkdown}`;
+
+      if (newBody === currentBody) return;
+      spinner.text = `updating description for PR #${number}...`;
+      await execWithStdin(`gh pr edit ${number} --body-file -`, newBody);
+      current.body = newBody;
+      cachePr(current);
+    }),
+  );
+
+  spinner.stop();
+
+  results.forEach((result, index) => {
+    if (result.status !== "rejected") return;
+    const change = plan.changes[index];
+    const number =
+      change === undefined ? undefined : prInfo.get(change)?.number;
+    const message =
+      result.reason instanceof Error
+        ? result.reason.message
+        : String(result.reason);
+    console.error(`failed to update description for PR #${number}: ${message}`);
+    process.exitCode = 1;
+  });
+
+  console.log(stackMarkdown);
 }
 
 async function doFetch(spinner: Ora) {
@@ -776,9 +738,12 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   await handleFix(spinner, revset, args.dryRun);
 
-  await handlePush(spinner, revset, args.dryRun);
-
+  // Gather: read-only. Nothing below may touch the repo, the remote, or
+  // GitHub until the whole plan has been rendered and confirmed.
   spinner.start();
+  spinner.text = "planning push...";
+  const pushPreview = await planPush(revset);
+
   spinner.text = "gathering changes...";
   const changes = await jjStdoutLines(
     `log --no-graph --reversed -r '(${revset}) & mutable()' -T 'change_id ++ "\n"'`,
@@ -790,102 +755,80 @@ export async function main(spinner: Ora, args: CliArgs) {
     process.exit(0);
   }
 
-  const approvedNewBookmarks = new Set<string>();
-
-  const changesBeforePushNewBookmarks =
-    await getBookmarksAndPRsForChanges(changes);
-
-  const bookmarksAndPRs = await approveAndPushNewBookmarks(
-    spinner,
-    args.dryRun,
-    changesBeforePushNewBookmarks,
-    approvedNewBookmarks,
-  );
+  const bookmarkResults = await getBookmarksAndPRsForChanges(changes);
+  const newBookmarks = await prepareNewBookmarks(bookmarkResults);
+  const bookmarksAndPRs = mergeBookmarkResults(bookmarkResults, newBookmarks);
 
   spinner.text = "planning pr changes...";
-  const plans = await createPrPlans(bookmarksAndPRs, trunk);
+  const prPlans = await createPrPlans(bookmarksAndPRs, trunk);
 
   // this should never happen.
-  if (plans.length === 0) {
+  if (prPlans.length === 0) {
     throw new Error("no plans to execute");
   }
-
-  spinner.stop();
-  console.log(plansToString(plans));
-
-  spinner.stop();
-
-  const prChangesAlreadyApproved = plans.every((plan) => {
-    if (plan.action === "noop") return true;
-    if (plan.action === "create") {
-      return approvedNewBookmarks.has(plan.headBookmark);
-    }
-    return false;
-  });
-  const shouldProceed =
-    args.dryRun ||
-    prChangesAlreadyApproved ||
-    (await confirm("update PRs? (⏎ / n)"));
-
-  if (!shouldProceed) {
-    spinner.stopAndPersist();
-    process.exit(0);
-  }
-
-  const prInfo = await alignPRs(spinner, plans, args.dryRun);
 
   const repo = await execToSchema(
     RepoSchema,
     `gh repo view --json nameWithOwner`,
   );
 
-  const stackMarkdown = args.dryRun
-    ? plannedStackMarkdown(plans, changes, trunk, repo.nameWithOwner)
-    : (() => {
-        const stackLines = ["## PR Stack"];
-        for (const change of [...changes].reverse()) {
-          const number = prInfo.get(change)?.number;
-          if (number !== undefined) {
-            stackLines.push(
-              `- https://github.com/${repo.nameWithOwner}/pull/${number}`,
-            );
-          }
-        }
-        stackLines.push(`- \`${trunk}\``);
-        return `${stackLines.join("\n")}\n`;
-      })();
-  const descriptionPrInfo = args.dryRun ? plannedPrInfo(plans) : prInfo;
+  const plan: ExecutionPlan = {
+    revset,
+    pushPreview,
+    newBookmarks,
+    prPlans,
+    changes,
+    trunk,
+    nameWithOwner: repo.nameWithOwner,
+  };
+
+  // Render: one summary of everything the run would do.
   spinner.stop();
+  if (plan.pushPreview !== null) {
+    console.log(plan.pushPreview);
+  }
+  if (plan.newBookmarks.length > 0) {
+    console.log(
+      `New bookmarks:\n${plan.newBookmarks.map((b) => b.headBookmark).join("\n")}`,
+    );
+  }
+  console.log(plansToString(plan.prPlans));
 
-  spinner.text = "updating descriptions...";
-  spinner.start();
-
-  await Promise.allSettled(
-    changes.map(async (change) => {
-      const number = descriptionPrInfo.get(change)?.number;
-      if (number === undefined) {
-        return;
+  if (args.dryRun) {
+    const stackMarkdown = renderStackMarkdown(
+      stackEntriesForPlans(plan.prPlans, plan.changes),
+      plan.trunk,
+      plan.nameWithOwner,
+    );
+    console.log(stackMarkdown);
+    for (const prPlan of plan.prPlans) {
+      if (prPlan.existingPr === undefined) continue;
+      const currentBody = prPlan.existingPr.body ?? "";
+      const newBody = `${bodyWithoutPrStack(currentBody)}${stackMarkdown}`;
+      if (newBody !== currentBody) {
+        console.log(
+          `would update description for PR #${prPlan.existingPr.number}`,
+        );
       }
+    }
+    return;
+  }
 
-      const current = await prForNumber(number);
-      const currentBody = current.body ?? "";
-      const bodyWithoutOldStack = bodyWithoutPrStack(currentBody);
-      const newBody = `${bodyWithoutOldStack}${stackMarkdown}`;
+  // Confirm: one prompt covering the pushes, PR creations, and retargets.
+  // Description upkeep alone (everything already up-to-date) needs none.
+  const onlyDescriptionUpkeep =
+    plan.pushPreview === null &&
+    plan.newBookmarks.length === 0 &&
+    plan.prPlans.every((prPlan) => prPlan.action === "noop");
+  if (!onlyDescriptionUpkeep) {
+    const confirmed = await confirm("apply these changes? (⏎ / n)");
+    if (!confirmed) {
+      console.log("Aborted.");
+      process.exit(1);
+    }
+  }
 
-      if (newBody === currentBody) return;
-      if (args.dryRun) {
-        spinner.stop();
-        console.log(`would update description for PR #${number}`);
-        return;
-      }
-      spinner.text = `updating description for PR #${number}...`;
-      await execWithStdin(`gh pr edit ${number} --body-file -`, newBody);
-      current.body = newBody;
-      cachePr(current);
-    }),
-  );
-  spinner.stop();
-  console.log(stackMarkdown);
+  await executePlan(spinner, plan);
 }
 
 if (import.meta.main) {

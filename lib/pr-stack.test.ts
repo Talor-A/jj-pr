@@ -5,6 +5,7 @@ import {
   jjLogBookmarksCommand,
   mergeBookmarkResults,
   proposedBookmarkRevset,
+  renderStackMarkdown,
   type BookmarkResult,
   type BookmarkResultWithHead,
 } from "./pr-stack";
@@ -130,5 +131,49 @@ describe("mergeBookmarkResults", () => {
         new: true,
       },
     ]);
+  });
+});
+
+describe("renderStackMarkdown", () => {
+  test("renders placeholders for entries without PR numbers, newest first", () => {
+    expect(
+      renderStackMarkdown(
+        [
+          { change: "qlruyyvy", headBookmark: "ta/jj/bottom", prNumber: 1 },
+          { change: "mykpnrqw", headBookmark: "ta/jj/top" },
+        ],
+        "main",
+        "example/repo",
+      ),
+    ).toBe(
+      "## PR Stack\n" +
+        "- [new PR] ta/jj/top\n" +
+        "- https://github.com/example/repo/pull/1\n" +
+        "- `main`\n",
+    );
+  });
+
+  test("renders links for entries that all have PR numbers", () => {
+    expect(
+      renderStackMarkdown(
+        [
+          { change: "qlruyyvy", headBookmark: "ta/jj/bottom", prNumber: 1 },
+          { change: "mykpnrqw", headBookmark: "ta/jj/top", prNumber: 2 },
+        ],
+        "main",
+        "example/repo",
+      ),
+    ).toBe(
+      "## PR Stack\n" +
+        "- https://github.com/example/repo/pull/2\n" +
+        "- https://github.com/example/repo/pull/1\n" +
+        "- `main`\n",
+    );
+  });
+
+  test("renders just the heading and trunk when there are no entries", () => {
+    expect(renderStackMarkdown([], "main", "example/repo")).toBe(
+      "## PR Stack\n- `main`\n",
+    );
   });
 });
