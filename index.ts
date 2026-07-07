@@ -143,6 +143,32 @@ async function localBookmarkHeadsForChange(change: string): Promise<string[]> {
   );
 }
 
+// Per-run memos so planning queries each change id at most once per template,
+// even when preferredProposedBookmarkHead revisits base candidates. Module
+// level matches the prsByHead/prsByNumber convention below; this CLI process
+// runs main once, so the memos never go stale.
+const bookmarkHeadsMemo = new Map<string, Promise<string[]>>();
+function memoizedBookmarkHeadsForChange(change: string): Promise<string[]> {
+  let heads = bookmarkHeadsMemo.get(change);
+  if (heads === undefined) {
+    heads = bookmarkHeadsForChange(change);
+    bookmarkHeadsMemo.set(change, heads);
+  }
+  return heads;
+}
+
+const localBookmarkHeadsMemo = new Map<string, Promise<string[]>>();
+function memoizedLocalBookmarkHeadsForChange(
+  change: string,
+): Promise<string[]> {
+  let heads = localBookmarkHeadsMemo.get(change);
+  if (heads === undefined) {
+    heads = localBookmarkHeadsForChange(change);
+    localBookmarkHeadsMemo.set(change, heads);
+  }
+  return heads;
+}
+
 const prsByHead = new Map<string, PullRequest>();
 const prsByNumber = new Map<number, PullRequest>();
 
@@ -189,7 +215,7 @@ async function preferredBookmarkHead(change: string): Promise<{
   head?: string;
   existingPr?: PullRequest;
 }> {
-  const bookmarkHeads = await bookmarkHeadsForChange(change);
+  const bookmarkHeads = await memoizedBookmarkHeadsForChange(change);
 
   for (const head of bookmarkHeads) {
     const existingPr = await prForHead(head);
@@ -204,7 +230,7 @@ async function preferredBookmarkHead(change: string): Promise<{
   // without a PR (deleted locally, or someone else's ref parked on the
   // commit) is treated as no bookmark at all, so the change gets a fresh
   // one, identically on every run.
-  const localHeads = await localBookmarkHeadsForChange(change);
+  const localHeads = await memoizedLocalBookmarkHeadsForChange(change);
   return { head: bookmarkHeads.find((head) => localHeads.includes(head)) };
 }
 
@@ -352,7 +378,7 @@ async function preferredProposedBookmarkHead(
           ...(plannedHeadsByChange.get(candidateChange)
             ? [plannedHeadsByChange.get(candidateChange)!]
             : []),
-          ...(await bookmarkHeadsForChange(candidateChange)),
+          ...(await memoizedBookmarkHeadsForChange(candidateChange)),
         ]),
       )
     ).flat(),
