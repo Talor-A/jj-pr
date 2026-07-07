@@ -36,6 +36,21 @@ export type BookmarkResultWithHead = Extract<
   { headBookmark: string }
 >;
 
+// Revset of base-branch candidates: real bookmarks plus changes whose
+// bookmarks are only planned (not yet pushed, e.g. during a dry run). With no
+// planned changes this degenerates to `bookmarks()`, so
+// `heads(trunk()..X & proposedBookmarkRevset(...))` stays equivalent to the
+// `closest_bookmark(X)` alias in config.toml.
+export function proposedBookmarkRevset(
+  bookmarksAndPRs: BookmarkResultWithHead[],
+): string {
+  const plannedNewChanges = bookmarksAndPRs
+    .filter((item) => item.new)
+    .map((item) => item.change);
+  if (plannedNewChanges.length === 0) return "bookmarks()";
+  return `(bookmarks() | ${plannedNewChanges.join(" | ")})`;
+}
+
 export function existingBookmarkResults(
   bookmarksAndPRs: BookmarkResult[],
 ): BookmarkResultWithHead[] {

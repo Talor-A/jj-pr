@@ -24,10 +24,12 @@ import {
 } from "./lib/rebase-stacks-after-fetch";
 import { absoluteGitDir, loadRebaseState } from "./lib/rebase-state";
 import {
-  closestBookmarkBeforeChangeRevset,
   existingBookmarkResults,
   jjLogBookmarksCommand,
   mergeBookmarkResults,
+  proposedBookmarkRevset,
+  type BookmarkResult,
+  type BookmarkResultWithHead,
 } from "./lib/pr-stack";
 import {
   JJLogItemJsonSchema,
@@ -288,19 +290,6 @@ async function handleFix(spinner: Ora, revset: string, dryRun: boolean) {
   }
 }
 
-type BookmarkResult =
-  | { headBookmark: string; existingPr: PullRequest; change: string }
-  | {
-      headBookmark: string;
-      existingPr: undefined;
-      change: string;
-    }
-  | {
-      headBookmark: undefined;
-      existingPr: undefined;
-      change: string;
-    };
-
 async function getBookmarksAndPRsForChanges(
   changes: string[],
 ): Promise<BookmarkResult[]> {
@@ -319,14 +308,11 @@ async function getBookmarksAndPRsForChanges(
   );
 }
 
-async function approveAndPushNewBookmarks(
-  spinner: Ora,
-  dryRun: boolean,
+async function prepareNewBookmarks(
   bookmarksAndPRs: BookmarkResult[],
-  approvedNewBookmarks: Set<string>,
-) {
+): Promise<BookmarkResultWithHead[]> {
   const bookmarkPrefix = await getBookmarkPrefix();
-  const changesNeedingBookmarks = await Promise.all(
+  return await Promise.all(
     bookmarksAndPRs
       .filter((change) => !change.headBookmark)
       .map(async ({ change, ...item }) => {
@@ -343,16 +329,24 @@ async function approveAndPushNewBookmarks(
         };
       }),
   );
-  const newBookmarks = changesNeedingBookmarks
-    .filter((bookmark) => bookmark.new)
-    .map((b) => b.headBookmark);
+}
+
+async function approveAndPushNewBookmarks(
+  spinner: Ora,
+  dryRun: boolean,
+  bookmarksAndPRs: BookmarkResult[],
+  approvedNewBookmarks: Set<string>,
+): Promise<BookmarkResultWithHead[]> {
+  const changesNeedingBookmarks = await prepareNewBookmarks(bookmarksAndPRs);
+  const newBookmarks = changesNeedingBookmarks.map((b) => b.headBookmark);
   if (newBookmarks.length === 0) return existingBookmarkResults(bookmarksAndPRs);
   spinner.stop();
   console.log(`New bookmarks:\n${newBookmarks.join("\n")}`);
 
   if (dryRun) {
-    console.log("dry run: skipping push.");
-    process.exit(0);
+    // Don't push, but keep the planned bookmarks so the rest of the dry run
+    // can report the PRs they would produce.
+    return mergeBookmarkResults(bookmarksAndPRs, changesNeedingBookmarks);
   }
   const shouldPush = await confirm("push new bookmarks? (⏎ / n)");
   if (!shouldPush) {
@@ -360,18 +354,59 @@ async function approveAndPushNewBookmarks(
   }
   spinner.start();
   await Promise.all(
-    changesNeedingBookmarks
-      .filter((bookmark) => bookmark.new)
-      .map(async ({ headBookmark, change }) => {
-        spinner.text = `pushing ${headBookmark}...`;
-        approvedNewBookmarks.add(headBookmark);
-        await exec(
-          `jj --config-file ${jjconf} git push --named ${headBookmark}=${change}`,
-        );
-      }),
+    changesNeedingBookmarks.map(async ({ headBookmark, change }) => {
+      spinner.text = `pushing ${headBookmark}...`;
+      approvedNewBookmarks.add(headBookmark);
+      await exec(
+        `jj --config-file ${jjconf} git push --named ${headBookmark}=${change}`,
+      );
+    }),
   );
 
   return mergeBookmarkResults(bookmarksAndPRs, changesNeedingBookmarks);
+}
+
+async function preferredProposedBookmarkHead(
+  change: string,
+  bookmarksAndPRs: BookmarkResultWithHead[],
+): Promise<{
+  head?: string;
+  existingPr?: PullRequest;
+}> {
+  const plannedHeadsByChange = new Map(
+    bookmarksAndPRs
+      .filter((item) => item.new)
+      .map((item) => [item.change, item.headBookmark]),
+  );
+  const closestBookmarkChanges = lines(
+    await exec(
+      `jj --config-file ${jjconf} log --no-graph -r ${shellQuote(
+        `heads(trunk()..${change}- & ${proposedBookmarkRevset(bookmarksAndPRs)})`,
+      )} -T 'change_id ++ "\n"'`,
+    ).then(mapToStdout),
+  );
+
+  const bookmarkHeads = unique(
+    (
+      await Promise.all(
+        closestBookmarkChanges.map(async (candidateChange) => [
+          ...(plannedHeadsByChange.get(candidateChange)
+            ? [plannedHeadsByChange.get(candidateChange)!]
+            : []),
+          ...(await bookmarkHeadsForChange(candidateChange)),
+        ]),
+      )
+    ).flat(),
+  );
+
+  for (const head of bookmarkHeads) {
+    const existingPr = await prForHead(head);
+    if (existingPr) {
+      return { head, existingPr };
+    }
+  }
+
+  return { head: bookmarkHeads[0] };
 }
 interface PRPlanCreate {
   action: "create";
@@ -399,21 +434,15 @@ interface PRPlanNoop {
 type PRPlan = PRPlanCreate | PRPlanUpdate | PRPlanNoop;
 
 async function createPrPlans(
-  bookmarksAndPRs: (
-    | { headBookmark: string; existingPr: PullRequest; change: string }
-    | { headBookmark: string; existingPr: undefined; change: string }
-  )[],
+  bookmarksAndPRs: BookmarkResultWithHead[],
   trunk: string,
 ): Promise<PRPlan[]> {
   const plans = await Promise.all(
     bookmarksAndPRs.map(
       async ({ headBookmark, existingPr, change }): Promise<PRPlan> => {
         const baseBranch =
-          (
-            await preferredBookmarkHead(
-              closestBookmarkBeforeChangeRevset(change),
-            )
-          ).head ?? trunk;
+          (await preferredProposedBookmarkHead(change, bookmarksAndPRs)).head ??
+          trunk;
 
         if (!existingPr) {
           return { action: "create", headBookmark, baseBranch, change };

@@ -1180,6 +1180,86 @@ describe("main", () => {
     expect(stdout).toContain("## PR Stack\n- `master`");
   }, 15000);
 
+  test("dry run plans PRs for unbookmarked changes without mutating GitHub", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "feature.txt"), "feature\n");
+    await jj.describe("@", "feature");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/feature");
+    expect(stdout).toContain("create these PRs:\ntest/jj/feature -> main");
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([]);
+    expect(
+      ghState.commands.some(
+        (command: string[]) =>
+          command[0] === "pr" &&
+          (command[1] === "create" || command[1] === "edit"),
+      ),
+    ).toBe(false);
+  }, 15000);
+
+  test("dry run bases a child PR on a planned bookmark for its unbookmarked parent", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "middle.txt"), "middle\n");
+    await jj.describe("@", "middle");
+    const middleChange = (
+      await $`jj --config-file ${jjconf} log -r @ --no-graph -T 'change_id ++ "\n"'`
+        .cwd(repo)
+        .text()
+    ).trim();
+
+    await jj.new();
+    await writeFile(join(repo, "top.txt"), "top\n");
+    await jj.describe("@", "top");
+    await jj.bookmark_create("@", "test/jj/top");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run ${middleChange}`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/middle");
+    expect(stdout).toContain("test/jj/middle -> main");
+    expect(stdout).toContain("test/jj/top -> test/jj/middle");
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([]);
+  }, 15000);
+
   test("exits cleanly if no stack", async () => {
     const { repo } = await setupTempJjRepo();
     await setupMainBranch(repo);

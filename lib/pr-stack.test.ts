@@ -4,6 +4,7 @@ import {
   existingBookmarkResults,
   jjLogBookmarksCommand,
   mergeBookmarkResults,
+  proposedBookmarkRevset,
   type BookmarkResult,
   type BookmarkResultWithHead,
 } from "./pr-stack";
@@ -30,6 +31,38 @@ describe("jjLogBookmarksCommand", () => {
       "-r 'closest_bookmark(mykpnrqwkvyxuzqqntuulzxwsrvxlkxm-)'",
     );
     expect(cmd).not.toContain("-r closest_bookmark(");
+  });
+});
+
+describe("proposedBookmarkRevset", () => {
+  test("degenerates to bookmarks() when nothing is planned", () => {
+    const input = [
+      { change: "qlruyyvy", headBookmark: "ta/jj/e2e-test", existingPr: pr },
+    ] satisfies BookmarkResultWithHead[];
+
+    expect(proposedBookmarkRevset(input)).toBe("bookmarks()");
+  });
+
+  test("unions planned changes with bookmarks()", () => {
+    const input = [
+      { change: "qlruyyvy", headBookmark: "ta/jj/e2e-test", existingPr: pr },
+      {
+        change: "mykpnrqw",
+        headBookmark: "ta/jj/planned",
+        existingPr: undefined,
+        new: true,
+      },
+      {
+        change: "yznrkqrt",
+        headBookmark: "ta/jj/also-planned",
+        existingPr: undefined,
+        new: true,
+      },
+    ] satisfies BookmarkResultWithHead[];
+
+    expect(proposedBookmarkRevset(input)).toBe(
+      "(bookmarks() | mykpnrqw | yznrkqrt)",
+    );
   });
 });
 
