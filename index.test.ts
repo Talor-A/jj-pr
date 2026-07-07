@@ -264,6 +264,29 @@ describe("bodyWithoutPrStack", () => {
       "just a description\n\n",
     );
   });
+
+  test("strips stack when GitHub returns CRLF line endings", () => {
+    const crlf =
+      "description\r\n\r\n## PR Stack\r\n- https://github.com/x/y/pull/1\r\n- `main`\r\n";
+    expect(bodyWithoutPrStack(crlf)).toBe("description\n\n");
+  });
+
+  test("strips every section when a body already has duplicates", () => {
+    const doubled = `description\n\n${stack}\n${stack}`;
+    expect(bodyWithoutPrStack(doubled)).toBe("description\n\n");
+  });
+
+  test("strips stack when the heading has trailing whitespace", () => {
+    const trailing =
+      "description\n\n## PR Stack \n- https://github.com/x/y/pull/1\n- `main`\n";
+    expect(bodyWithoutPrStack(trailing)).toBe("description\n\n");
+  });
+
+  test("strips stack with multiple blank lines after the heading", () => {
+    const blanks =
+      "description\n\n## PR Stack\n\n\n- https://github.com/x/y/pull/1\n- `main`\n";
+    expect(bodyWithoutPrStack(blanks)).toBe("description\n\n");
+  });
 });
 
 describe("bookmarkHead", () => {

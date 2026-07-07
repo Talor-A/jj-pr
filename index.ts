@@ -74,8 +74,13 @@ async function getBookmarkPrefix(): Promise<string> {
   return _bookmarkPrefix;
 }
 
+// Matches a generated "## PR Stack" section and the bullet list that follows.
+// Global so every prior section is stripped (a body that already accumulated
+// duplicates self-heals), and tolerant of trailing heading whitespace and
+// extra blank lines after the heading. Bodies are normalized to LF before this
+// runs (see bodyWithoutPrStack), since GitHub returns PR bodies with CRLF.
 const PR_STACK_SECTION_PATTERN =
-  /(?:^|\n)(?:<!-- GENERATED_PR_STACK -->\n)?## PR Stack\n\n?(?:- .+(?:\n|$))+/m;
+  /(?:^|\n)(?:<!-- GENERATED_PR_STACK -->\n)?## PR Stack[ \t]*\n\n*(?:- .+(?:\n|$))+/gm;
 
 async function confirm(
   message: string = "proceed? (⏎ / n)",
@@ -98,7 +103,13 @@ function unique(values: string[]): string[] {
 }
 
 export function bodyWithoutPrStack(body: string): string {
-  const stripped = body.replace(PR_STACK_SECTION_PATTERN, "").trimEnd();
+  // GitHub returns PR bodies with CRLF line endings, but we author them with
+  // LF. Normalize first so the pattern matches on round-trips; otherwise the
+  // old section is left in place and a duplicate gets appended.
+  const stripped = body
+    .replace(/\r\n/g, "\n")
+    .replace(PR_STACK_SECTION_PATTERN, "")
+    .trimEnd();
 
   return stripped.length > 0 ? `${stripped}\n\n` : "";
 }
