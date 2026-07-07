@@ -211,7 +211,9 @@ function sanitizeBookmarkDescription(
   description: string,
   fallback: string,
 ): string {
-  const slug = (description || fallback)
+  // Only the summary line belongs in a bookmark name; stripping the newlines
+  // out of a multi-line description would glue the body onto it.
+  const slug = (description.split(/\r?\n/)[0] || fallback)
     .replace(/ /g, "-")
     .replace(/[^a-zA-Z0-9_-]/g, "")
     .replace(/--+/g, "-")

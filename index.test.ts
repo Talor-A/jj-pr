@@ -1271,6 +1271,37 @@ describe("main", () => {
     expect(ghState.prs).toEqual([]);
   }, 15000);
 
+  test("slugs new bookmark names from only the description's first line", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "feature.txt"), "feature\n");
+    await jj.describe(
+      "@",
+      "feature\n\nlonger body that must not leak into the bookmark name",
+    );
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("New bookmarks:\ntest/jj/feature\n");
+    expect(stdout).not.toContain("featurelonger");
+  }, 15000);
+
   test("dry run preserves every explicitly selected revision in a compound revset", async () => {
     const { repo } = await setupTempJjRepo();
     const jj = new JJ(repo);
