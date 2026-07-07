@@ -690,7 +690,7 @@ describe("main", () => {
       {
         number: 2,
         head: "test/jj/ours",
-        title: "test/jj/ours",
+        title: "ours",
         baseRefName: "theirs",
         body: stackBody,
       },
@@ -736,9 +736,57 @@ describe("main", () => {
       {
         number: 1,
         head: "test/jj/feature",
-        title: "test/jj/feature",
+        title: "feature",
         baseRefName: "main",
         body: "## PR Stack\n- https://github.com/example/repo/pull/1\n- `main`\n",
+      },
+    ]);
+  }, 15000);
+
+  test("uses the change description for a new PR's title and body", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "feature.txt"), "feature\n");
+    await jj.describe(
+      "@",
+      "add feature flag\n\nRolls out gradually.\nSee the runbook.",
+    );
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+    const proc = Bun.spawn(["sh", "-c", 'yes "" | "$BUN_EXE" "$JJ_PR_INDEX"'], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        BUN_EXE: bun,
+        FAKE_GH_STATE: statePath,
+        JJ_PR_INDEX: pathToIndexFile,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([
+      {
+        number: 1,
+        head: "test/jj/add-feature-flag",
+        title: "add feature flag",
+        baseRefName: "main",
+        body:
+          "Rolls out gradually.\nSee the runbook.\n\n" +
+          "## PR Stack\n- https://github.com/example/repo/pull/1\n- `main`\n",
       },
     ]);
   }, 15000);
@@ -835,7 +883,7 @@ describe("main", () => {
       {
         number: 3,
         head: "test/jj/top-feature",
-        title: "test/jj/top-feature",
+        title: "top feature",
         baseRefName: "test/jj/middle-feature",
         body: stackBody,
       },
@@ -895,14 +943,14 @@ describe("main", () => {
       {
         number: 1,
         head: "hotfix-login",
-        title: "hotfix-login",
+        title: "hotfix login",
         baseRefName: "main",
         body: stackBody,
       },
       {
         number: 2,
         head: "test/jj/top",
-        title: "test/jj/top",
+        title: "top",
         baseRefName: "hotfix-login",
         body: stackBody,
       },
@@ -979,7 +1027,7 @@ describe("main", () => {
       {
         number: 2,
         head: "test/jj/top-feature",
-        title: "test/jj/top-feature",
+        title: "top feature",
         baseRefName: "main",
         body: stackBody,
       },
@@ -1411,21 +1459,21 @@ describe("main", () => {
       {
         number: 1,
         head: "test/jj/fix",
-        title: "test/jj/fix",
+        title: "fix",
         baseRefName: "main",
         body: stackBody,
       },
       {
         number: 2,
         head: "test/jj/fix-2",
-        title: "test/jj/fix-2",
+        title: "fix",
         baseRefName: "test/jj/fix",
         body: stackBody,
       },
       {
         number: 3,
         head: "test/jj/fix-3",
-        title: "test/jj/fix-3",
+        title: "fix",
         baseRefName: "test/jj/fix-2",
         body: stackBody,
       },
