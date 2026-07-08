@@ -31,10 +31,15 @@ import {
   type StackEntry,
 } from "./lib/pr-stack";
 import { parsePushPreview, type PushMove } from "./lib/push-plan";
-import { cachePr, prForHead, prForNumber, alignPRs } from "./lib/github";
+import {
+  cachePr,
+  prForHead,
+  prForNumber,
+  alignPRs,
+  prState,
+} from "./lib/github";
 import {
   JJLogItemJsonSchema,
-  PrStateSchema,
   RepoSchema,
   type PullRequest,
 } from "./lib/schema";
@@ -500,10 +505,7 @@ async function mergedTailFor(
 
   const displacedMerged: number[] = [];
   for (const number of displaced) {
-    const state = await execToSchema(
-      PrStateSchema,
-      `gh pr view ${String(number)} --json number,state`,
-    ).catch(() => undefined);
+    const state = await prState(number);
     if (state?.state === "MERGED") displacedMerged.push(number);
   }
 

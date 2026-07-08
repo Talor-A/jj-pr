@@ -2,6 +2,7 @@ import { exec, execToSchema, execWithStdin, shellQuote } from "./exec";
 import { jjCommand } from "./jj";
 import {
   JJLogItemJsonSchema,
+  PrStateSchema,
   PullRequestListSchema,
   PullRequestSchema,
   type PullRequest,
@@ -162,4 +163,15 @@ export async function alignPRs(spinner: Ora, plans: PRPlan[]) {
     }
   }
   return prsByChange;
+}
+
+// GraphQL state enum: OPEN | CLOSED | MERGED. undefined when gh errors
+// (e.g. the PR number no longer exists).
+export function prState(
+  number: number,
+): Promise<{ number: number; state: string } | undefined> {
+  return execToSchema(
+    PrStateSchema,
+    `gh pr view ${String(number)} --json number,state`,
+  ).catch(() => undefined);
 }
