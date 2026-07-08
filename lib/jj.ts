@@ -59,3 +59,19 @@ export function bookmarksOn(revset: string): Promise<string[]> {
     `log -r ${shellQuote(revset)} --no-graph -T 'bookmarks.map(|b| b.name() ++ if(b.remote(), "@" ++ b.remote(), "")).join("\\n") ++ "\\n"'`,
   );
 }
+
+export function localBookmarksOn(revset: string): Promise<string[]> {
+  return jjStdoutLines(
+    `log -r ${shellQuote(revset)} --no-graph -T 'local_bookmarks.map(|b| b.name()).join("\\n") ++ "\\n"'`,
+  );
+}
+
+export function allBookmarkNames(): Promise<string[]> {
+  return jjStdoutLines(`bookmark list --all-remotes -T 'name ++ "\\n"'`);
+}
+
+export function bookmarkNamesIn(revset: string): Promise<string[]> {
+  return jjStdoutLines(
+    `bookmark list -r ${shellQuote(revset)} -T 'name ++ "\n"'`,
+  );
+}

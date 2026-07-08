@@ -38,7 +38,7 @@ import {
 } from "./lib/schema";
 import pkg from "./package.json";
 
-import { jj, jjCommand, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn } from "./lib/jj";
+import { jj, jjCommand, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn } from "./lib/jj";
 import { lines, unique } from "./lib/utils";
 
 let _bookmarkPrefix: string | undefined;
@@ -104,11 +104,7 @@ export async function bookmarkHeadsForChange(
 }
 
 async function localBookmarkHeadsForChange(change: string): Promise<string[]> {
-  return unique(
-    await jjStdoutLines(
-      `log -r ${shellQuote(change)} --no-graph -T 'local_bookmarks.map(|b| b.name()).join("\\n") ++ "\\n"'`,
-    ),
-  );
+  return unique(await localBookmarksOn(change));
 }
 
 const prsByHead = new Map<string, PullRequest>();
@@ -203,10 +199,7 @@ async function planPush(revset: string): Promise<string | null> {
 }
 
 async function ensureTrunk(): Promise<string> {
-  const trunk = await jj(`bookmark list -r 'trunk()' -T 'name ++ "\n"'`)
-    .then(mapToStdout)
-    .then((x) => x.trim())
-    .then(lines);
+  const trunk = await bookmarkNamesIn("trunk()");
   if (!trunk[0]) {
     throw new Error("Unable to find trunk bookmark");
   }
@@ -253,9 +246,7 @@ async function getBookmarksAndPRsForChanges(
 }
 
 async function takenBookmarkNames(): Promise<Set<string>> {
-  return new Set(
-    await jjStdoutLines(`bookmark list --all-remotes -T 'name ++ "\\n"'`),
-  );
+  return new Set(await allBookmarkNames());
 }
 
 function uniqueBookmarkName(base: string, taken: Set<string>): string {
