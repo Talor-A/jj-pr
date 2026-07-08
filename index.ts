@@ -17,13 +17,12 @@ import {
   type MergedAncestorPr,
 } from "./lib/merged-prs";
 import {
-  mergeBookmarkResults,
   parsePrStackSection,
   proposedBookmarkRevset,
   PR_STACK_SECTION_PATTERN,
   renderStackMarkdown,
-  type BookmarkResult,
-  type BookmarkResultWithHead,
+  type PlannedBookmark,
+  type ResolvedBookmark,
   type StackEntry,
 } from "./lib/pr-stack";
 import {
@@ -231,22 +230,49 @@ async function handleFix(spinner: Ora, revset: string, dryRun: boolean) {
   }
 }
 
-async function getBookmarksAndPRsForChanges(
+// Resolves every change in the stack (oldest first) to the bookmark that
+// will represent it, in one pass: an existing PR head wins, then a local
+// bookmark, otherwise a name is invented. Names are reserved sequentially
+// in stack order so a slug colliding with an existing bookmark (local or
+// remote) or an earlier planned one gets a -2/-3/... suffix, rather than
+// failing `git push --named` halfway through the stack.
+async function resolveBookmarks(
   changes: string[],
-): Promise<BookmarkResult[]> {
-  return Promise.all(
-    changes.map(async (change) => {
-      const result = await preferredBookmarkHead(change);
-      if (!result.head) {
-        return { headBookmark: undefined, existingPr: undefined, change };
-      }
-
-      const headBookmark = result.head;
-      const existingPr = result.existingPr;
-
-      return { headBookmark, existingPr, change };
-    }),
+): Promise<ResolvedBookmark[]> {
+  const heads = await Promise.all(
+    changes.map(async (change) => ({
+      change,
+      ...(await preferredBookmarkHead(change)),
+    })),
   );
+
+  const bookmarkPrefix = await getBookmarkPrefix();
+  const taken = await takenBookmarkNames();
+  const descriptions = new Map(
+    await Promise.all(
+      heads
+        .filter(({ head }) => !head)
+        .map(async ({ change }) => [change, await logItem(change)] as const),
+    ),
+  );
+
+  return heads.map(({ change, head, existingPr }): ResolvedBookmark => {
+    if (head && existingPr) {
+      return { kind: "pr", change, headBookmark: head, existingPr };
+    }
+    if (head) {
+      return { kind: "local", change, headBookmark: head };
+    }
+    const item = descriptions.get(change)!;
+    return {
+      kind: "planned",
+      change,
+      headBookmark: uniqueBookmarkName(
+        `${bookmarkPrefix}${sanitizeBookmarkDescription(item.description, item.change_id)}`,
+        taken,
+      ),
+    };
+  });
 }
 
 async function takenBookmarkNames(): Promise<Set<string>> {
@@ -262,38 +288,9 @@ function uniqueBookmarkName(base: string, taken: Set<string>): string {
   return name;
 }
 
-async function prepareNewBookmarks(
-  bookmarksAndPRs: BookmarkResult[],
-): Promise<BookmarkResultWithHead[]> {
-  const bookmarkPrefix = await getBookmarkPrefix();
-  const taken = await takenBookmarkNames();
-  const withDescriptions = await Promise.all(
-    bookmarksAndPRs
-      .filter((change) => !change.headBookmark)
-      .map(async (item) => ({
-        item,
-        changeitem: await logItem(item.change),
-      })),
-  );
-
-  // Names are reserved sequentially in stack order: a slug that collides
-  // with an existing bookmark (local or remote) or with an earlier planned
-  // one gets a -2/-3/... suffix, rather than failing `git push --named`
-  // halfway through the stack.
-  return withDescriptions.map(({ item: { change, ...item }, changeitem }) => ({
-    change,
-    ...item,
-    headBookmark: uniqueBookmarkName(
-      `${bookmarkPrefix}${sanitizeBookmarkDescription(changeitem.description, changeitem.change_id)}`,
-      taken,
-    ),
-    new: true as const,
-  }));
-}
-
 async function preferredProposedBookmarkHead(
   change: string,
-  bookmarksAndPRs: BookmarkResultWithHead[],
+  bookmarksAndPRs: ResolvedBookmark[],
   // Revset fragment excluding merged-PR heads (and their ancestry) from base
   // candidacy: pre-rebase they still sit between trunk and the change, but
   // the plan must match the post-rebase graph, where they are gone.
@@ -304,7 +301,7 @@ async function preferredProposedBookmarkHead(
 }> {
   const plannedHeadsByChange = new Map(
     bookmarksAndPRs
-      .filter((item) => item.new)
+      .filter((item) => item.kind === "planned")
       .map((item) => [item.change, item.headBookmark]),
   );
   const closestBookmarkChanges = await changeIdsIn(
@@ -359,7 +356,7 @@ interface PRPlanNoop {
 type PRPlan = PRPlanCreate | PRPlanUpdate | PRPlanNoop;
 
 async function createPrPlans(
-  bookmarksAndPRs: BookmarkResultWithHead[],
+  bookmarksAndPRs: ResolvedBookmark[],
   trunk: string,
   excludeMerged: string = "",
 ): Promise<PRPlan[]> {
@@ -586,7 +583,7 @@ interface ExecutionPlan {
   pushPreview: string | null; // from pushPreview
   rebases: MergedAncestorPr[]; // stranded stacks to rebase onto trunk first
   mergedTail: number[]; // merged ancestor PRs kept below the trunk line
-  newBookmarks: BookmarkResultWithHead[]; // named but NOT yet pushed (new: true)
+  newBookmarks: PlannedBookmark[]; // named but NOT yet pushed
   prPlans: PRPlan[];
   changes: string[]; // oldest-first change ids
   trunk: string;
@@ -770,9 +767,10 @@ export async function main(spinner: Ora, args: CliArgs) {
     process.exit(0);
   }
 
-  const bookmarkResults = await getBookmarksAndPRsForChanges(changes);
-  const newBookmarks = await prepareNewBookmarks(bookmarkResults);
-  const bookmarksAndPRs = mergeBookmarkResults(bookmarkResults, newBookmarks);
+  const bookmarksAndPRs = await resolveBookmarks(changes);
+  const newBookmarks = bookmarksAndPRs.filter(
+    (bookmark) => bookmark.kind === "planned",
+  );
 
   spinner.text = "planning pr changes...";
   const prPlans = await createPrPlans(bookmarksAndPRs, trunk, excludeMerged);
