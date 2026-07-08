@@ -545,15 +545,32 @@ function rebaseCommandFor(source: MergedAncestorPr): string {
 // Everything a run would do, gathered read-only so it can be rendered and
 // confirmed as a whole before anything mutates.
 interface ExecutionPlan {
+  /** Revset of changes to push. */
   revset: string;
-  pushPreview: string | null; // from pushPreview
-  rebases: MergedAncestorPr[]; // stranded stacks to rebase onto trunk first
-  mergedTail: number[]; // merged ancestor PRs kept below the trunk line
-  newBookmarks: PlannedBookmark[]; // named but NOT yet pushed
+  /** Stranded stacks to rebase onto trunk first. */
+  rebases: MergedAncestorPr[];
+  /** Push preview from pushPreview, or null when nothing to push. */
+  pushPreview: string | null;
+  /** Named but NOT yet pushed. */
+  newBookmarks: PlannedBookmark[];
   prPlans: PRPlan[];
-  changes: string[]; // oldest-first change ids
+  /** Oldest-first change ids. */
+  changes: string[];
+  /** Merged ancestor PRs kept below the trunk line. */
+  mergedTail: number[];
   trunk: string;
   nameWithOwner: string;
+}
+
+// True when the run would only refresh PR descriptions: nothing to push,
+// rebase, or create, so no confirmation is needed.
+function isDescriptionUpkeepOnly(plan: ExecutionPlan): boolean {
+  return (
+    plan.pushPreview === null &&
+    plan.rebases.length === 0 &&
+    plan.newBookmarks.length === 0 &&
+    plan.prPlans.every((prPlan) => prPlan.action === "noop")
+  );
 }
 
 async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
@@ -761,12 +778,12 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   const plan: ExecutionPlan = {
     revset,
-    pushPreview: pushPreviewResult,
     rebases: detection.rebaseSources,
-    mergedTail,
+    pushPreview: pushPreviewResult,
     newBookmarks,
     prPlans,
     changes,
+    mergedTail,
     trunk,
     nameWithOwner: repo.nameWithOwner,
   };
@@ -822,12 +839,7 @@ export async function main(spinner: Ora, args: CliArgs) {
   // Confirm: one prompt covering the rebases, pushes, PR creations, and
   // retargets. Description upkeep alone (everything already up-to-date)
   // needs none.
-  const onlyDescriptionUpkeep =
-    plan.pushPreview === null &&
-    plan.rebases.length === 0 &&
-    plan.newBookmarks.length === 0 &&
-    plan.prPlans.every((prPlan) => prPlan.action === "noop");
-  if (!onlyDescriptionUpkeep) {
+  if (!isDescriptionUpkeepOnly(plan)) {
     const confirmed = await confirm("apply these changes? (⏎ / n)");
     if (!confirmed) {
       console.log("Aborted.");
