@@ -123,10 +123,10 @@ export function renderStackMarkdown(
 // `heads(trunk()..X & proposedBookmarkRevset(...))` stays equivalent to the
 // `closest_bookmark(X)` alias in config.toml.
 export function proposedBookmarkRevset(
-  bookmarksAndPRs: BookmarkResultWithHead[],
+  bookmarks: ResolvedBookmark[],
 ): string {
-  const plannedNewChanges = bookmarksAndPRs
-    .filter((item) => item.new)
+  const plannedNewChanges = bookmarks
+    .filter((item) => item.kind === "planned")
     .map((item) => item.change);
   if (plannedNewChanges.length === 0) return "bookmarks()";
   return `(bookmarks() | ${plannedNewChanges.join(" | ")})`;
