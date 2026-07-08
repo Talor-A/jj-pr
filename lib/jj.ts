@@ -1,5 +1,5 @@
 import { PROD_JJ_CONFIG } from "./config";
-import { exec, mapToStdout } from "./exec";
+import { exec, mapToStdout, shellQuote, succeeds } from "./exec";
 import { lines } from "./utils";
 
 // All jj-pr commands run against the bundled config so the revset aliases in
@@ -18,4 +18,18 @@ export function jj(args: string): Promise<{ stdout: string; stderr: string }> {
 
 export function jjStdoutLines(args: string): Promise<string[]> {
   return jj(args).then(mapToStdout).then(lines);
+}
+
+// `jj config get` exits non-zero when the key is unset; that is the
+// "no value" signal, not an error.
+export async function configGet(key: string): Promise<string | undefined> {
+  try {
+    return (await jj(`config get ${shellQuote(key)}`).then(mapToStdout)).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+export function hasConfig(key: string): Promise<boolean> {
+  return succeeds(jjCommand(`config get ${shellQuote(key)}`));
 }
