@@ -25,6 +25,31 @@ export type ResolvedBookmark =
 
 export type PlannedBookmark = Extract<ResolvedBookmark, { kind: "planned" }>;
 
+interface PRPlanCreate {
+  action: "create";
+  headBookmark: string;
+  baseBranch: string;
+  existingPr?: undefined;
+  change: string;
+}
+interface PRPlanUpdate {
+  // base needs to move to a new branch
+  action: "update";
+  headBookmark: string;
+  baseBranch: string;
+  existingPr: PullRequest;
+  change: string;
+}
+interface PRPlanNoop {
+  // the base is already up-to-date
+  action: "noop";
+  headBookmark: string;
+  baseBranch: string;
+  existingPr: PullRequest;
+  change: string;
+}
+export type PRPlan = PRPlanCreate | PRPlanUpdate | PRPlanNoop;
+
 export interface StackEntry {
   change: string;
   headBookmark: string;

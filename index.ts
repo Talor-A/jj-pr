@@ -26,15 +26,15 @@ import {
   PR_STACK_SECTION_PATTERN,
   renderStackMarkdown,
   type PlannedBookmark,
+  type PRPlan,
   type ResolvedBookmark,
   type StackEntry,
 } from "./lib/pr-stack";
 import { parsePushPreview, type PushMove } from "./lib/push-plan";
-import { cachePr, prForHead, prForNumber } from "./lib/github";
+import { cachePr, prForHead, prForNumber, alignPRs } from "./lib/github";
 import {
   JJLogItemJsonSchema,
   PrStateSchema,
-  PullRequestListSchema,
   RepoSchema,
   type PullRequest,
 } from "./lib/schema";
@@ -357,30 +357,6 @@ async function preferredProposedBookmarkHead(
 
   return { head: bookmarkHeads[0] };
 }
-interface PRPlanCreate {
-  action: "create";
-  headBookmark: string;
-  baseBranch: string;
-  existingPr?: undefined;
-  change: string;
-}
-interface PRPlanUpdate {
-  // base needs to move to a new branch
-  action: "update";
-  headBookmark: string;
-  baseBranch: string;
-  existingPr: PullRequest;
-  change: string;
-}
-interface PRPlanNoop {
-  // the base is already up-to-date
-  action: "noop";
-  headBookmark: string;
-  baseBranch: string;
-  existingPr: PullRequest;
-  change: string;
-}
-type PRPlan = PRPlanCreate | PRPlanUpdate | PRPlanNoop;
 
 async function createPrPlans(
   bookmarksAndPRs: ResolvedBookmark[],
@@ -426,9 +402,9 @@ async function createPrPlans(
 
 function plansToString(plans: PRPlan[]): string {
   type GroupedPlans = {
-    create: PRPlanCreate[];
-    update: PRPlanUpdate[];
-    noop: PRPlanNoop[];
+    create: Extract<PRPlan, { action: "create" }>[];
+    update: Extract<PRPlan, { action: "update" }>[];
+    noop: Extract<PRPlan, { action: "noop" }>[];
   };
   const groupedPlans: GroupedPlans = { create: [], update: [], noop: [] };
   plans.forEach((plan) => {
@@ -500,118 +476,7 @@ function stackEntriesForPlans(
   });
 }
 
-// `gh pr create --fill` derives the title/body from local git commits, which
-// don't exist in a non-colocated workspace (jj only auto-exports bookmarks to
-// git refs in colocated checkouts). Build them from the jj description instead.
-async function prTitleAndBody(
-  change: string,
-  fallbackTitle: string,
-): Promise<{ title: string; body: string }> {
-  const item = await execToSchema(
-    JJLogItemJsonSchema,
-    jjCommand(`log -r ${shellQuote(change)} --no-graph -T 'json(self)'`),
-  );
-  const [summary = "", ...rest] = item.description.split(/\r?\n/);
-  return {
-    title: summary.trim() || fallbackTitle,
-    body: unwrapHardWrappedText(rest.join("\n")),
-  };
-}
-
-// Lines that start a new markdown block rather than continuing a wrapped
-// prose line: list items, headings, blockquotes, code fences.
-const MARKDOWN_BLOCK_START = /^\s*([-*+]\s|\d+[.)]\s|#{1,6}\s|>|```|~~~)/;
-const CODE_FENCE = /^\s*(```|~~~)/;
-
-// jj/git commit messages are conventionally hard-wrapped at ~80 chars. Join
-// wrapped lines back into paragraphs so the PR body renders as intended
-// markdown. Blank lines stay as paragraph breaks, lines that look like list
-// items/headings/etc. start a new line instead of being joined into the
-// previous one, and fenced code blocks are passed through verbatim.
-export function unwrapHardWrappedText(text: string): string {
-  const lines = text.trim().split(/\r?\n/);
-  const out: string[] = [];
-  let inCodeFence = false;
-  if (lines.some((line) => line.length > 80)) return text;
-
-  for (const line of lines) {
-    if (inCodeFence) {
-      out.push(line);
-      if (CODE_FENCE.test(line)) inCodeFence = false;
-      continue;
-    }
-    if (CODE_FENCE.test(line)) {
-      inCodeFence = true;
-      out.push(line);
-      continue;
-    }
-    const trimmed = line.trim();
-    const prev = out.at(-1);
-    if (
-      trimmed !== "" &&
-      prev !== undefined &&
-      prev !== "" &&
-      !MARKDOWN_BLOCK_START.test(line)
-    ) {
-      out[out.length - 1] = `${prev} ${trimmed}`;
-    } else {
-      out.push(trimmed);
-    }
-  }
-  return out.join("\n").replace(/\n{3,}/g, "\n\n");
-}
-
-async function alignPRs(spinner: Ora, plans: PRPlan[]) {
-  const prsByChange = new Map<string, { number: number; body: string }>();
-
-  for (const plan of plans) {
-    if (plan.action === "noop") {
-      prsByChange.set(plan.change, {
-        number: plan.existingPr.number,
-        body: plan.existingPr.body ?? "",
-      });
-      continue;
-    }
-
-    const { action, headBookmark, baseBranch, existingPr, change } = plan;
-
-    if (action === "update") {
-      spinner.text = `updating base branch for ${headBookmark}...`;
-      await exec(`gh pr edit ${existingPr.number} --base ${baseBranch}`);
-
-      prsByChange.set(change, {
-        number: existingPr.number,
-        body: existingPr.body ?? "",
-      });
-
-      continue;
-    }
-
-    if (action === "create") {
-      spinner.text = `creating new PR for ${headBookmark}...`;
-      const { title, body } = await prTitleAndBody(change, headBookmark);
-      await execWithStdin(
-        `gh pr create --head ${headBookmark} --base ${baseBranch} --draft --title ${shellQuote(title)} --body-file -`,
-        body,
-      );
-
-      const createdPrs = await execToSchema(
-        PullRequestListSchema,
-        `gh pr list --head ${headBookmark} --json number,title,baseRefName,body`,
-      );
-      if (!createdPrs[0]) {
-        throw new Error(`Unable to find PR created for ${headBookmark}`);
-      }
-
-      const createdPr = cachePr(createdPrs[0], headBookmark);
-      prsByChange.set(change, {
-        number: createdPr.number,
-        body: createdPr.body ?? "",
-      });
-    }
-  }
-  return prsByChange;
-}
+export { unwrapHardWrappedText } from "./lib/github";
 
 // Assembles the merged-PR tail for the stack section: PRs detected as merged
 // this run, then entries displaced from the live stack and confirmed merged
