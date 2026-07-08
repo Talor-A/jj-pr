@@ -29,7 +29,6 @@ import {
   type StackEntry,
 } from "./lib/pr-stack";
 import {
-  JJLogItemJsonSchema,
   PrStateSchema,
   PullRequestListSchema,
   PullRequestSchema,
@@ -38,7 +37,7 @@ import {
 } from "./lib/schema";
 import pkg from "./package.json";
 
-import { jj, jjCommand, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn } from "./lib/jj";
+import { jj, jjCommand, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn, logItem } from "./lib/jj";
 import { lines, unique } from "./lib/utils";
 
 let _bookmarkPrefix: string | undefined;
@@ -268,12 +267,7 @@ async function prepareNewBookmarks(
       .filter((change) => !change.headBookmark)
       .map(async (item) => ({
         item,
-        changeitem: await execToSchema(
-          JJLogItemJsonSchema,
-          jjCommand(
-            `log -r ${shellQuote(item.change)} --no-graph -T 'json(self)'`,
-          ),
-        ),
+        changeitem: await logItem(item.change),
       })),
   );
 
@@ -484,10 +478,7 @@ async function prTitleAndBody(
   change: string,
   fallbackTitle: string,
 ): Promise<{ title: string; body: string }> {
-  const item = await execToSchema(
-    JJLogItemJsonSchema,
-    jjCommand(`log -r ${shellQuote(change)} --no-graph -T 'json(self)'`),
-  );
+  const item = await logItem(change);
   const [summary = "", ...rest] = item.description.split(/\r?\n/);
   return {
     title: summary.trim() || fallbackTitle,

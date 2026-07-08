@@ -1,5 +1,6 @@
 import { PROD_JJ_CONFIG } from "./config";
-import { exec, mapToStdout, shellQuote, succeeds } from "./exec";
+import { exec, execToSchema, mapToStdout, shellQuote, succeeds } from "./exec";
+import { JJLogItemJsonSchema } from "./schema";
 import { lines } from "./utils";
 
 // All jj-pr commands run against the bundled config so the revset aliases in
@@ -73,5 +74,14 @@ export function allBookmarkNames(): Promise<string[]> {
 export function bookmarkNamesIn(revset: string): Promise<string[]> {
   return jjStdoutLines(
     `bookmark list -r ${shellQuote(revset)} -T 'name ++ "\n"'`,
+  );
+}
+
+// Full commit metadata for a single revision, via jj's stable json(self)
+// template.
+export function logItem(change: string) {
+  return execToSchema(
+    JJLogItemJsonSchema,
+    jjCommand(`log -r ${shellQuote(change)} --no-graph -T 'json(self)'`),
   );
 }
