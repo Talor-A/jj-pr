@@ -112,3 +112,14 @@ export async function gitPushNamed(
 ): Promise<void> {
   await jj(`git push --named ${bookmark}=${change}`);
 }
+
+// Rebase everything stranded above a merged head onto trunk. The command
+// string is exposed separately so the confirm prompt can show exactly what
+// will run.
+export function rebaseOntoTrunkArgs(headRefOid: string): string {
+  return `rebase -s ${shellQuote(`${headRefOid}+ & mutable()`)} -d 'trunk()'`;
+}
+
+export async function rebaseOntoTrunk(headRefOid: string): Promise<void> {
+  await jj(rebaseOntoTrunkArgs(headRefOid));
+}

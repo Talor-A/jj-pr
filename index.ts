@@ -36,7 +36,7 @@ import {
 } from "./lib/schema";
 import pkg from "./package.json";
 
-import { jj, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn, logItem, gitFetch, pushPreview, gitPush, gitPushNamed } from "./lib/jj";
+import { jj, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn, logItem, gitFetch, pushPreview, gitPush, gitPushNamed, rebaseOntoTrunkArgs, rebaseOntoTrunk } from "./lib/jj";
 import { unique } from "./lib/utils";
 
 let _bookmarkPrefix: string | undefined;
@@ -560,7 +560,7 @@ async function mergedTailFor(
 }
 
 function rebaseCommandFor(source: MergedAncestorPr): string {
-  return `jj rebase -s '${source.headRefOid}+ & mutable()' -d 'trunk()'`;
+  return `jj ${rebaseOntoTrunkArgs(source.headRefOid)}`;
 }
 
 // Everything a run would do, gathered read-only so it can be rendered and
@@ -582,9 +582,7 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
 
   for (const source of plan.rebases) {
     spinner.text = `rebasing changes stranded above merged PR #${source.prNumber}...`;
-    await jj(
-      `rebase -s ${shellQuote(`${source.headRefOid}+ & mutable()`)} -d 'trunk()'`,
-    );
+    await rebaseOntoTrunk(source.headRefOid);
   }
   if (plan.rebases.length > 0) {
     const conflicted = await jjStdoutLines(
