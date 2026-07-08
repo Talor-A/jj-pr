@@ -433,16 +433,9 @@ function stackEntriesForPlans(
   const plansByChange = new Map(plans.map((plan) => [plan.change, plan]));
   return changes.flatMap((change) => {
     const plan = plansByChange.get(change);
-    if (plan === undefined) {
-      return [];
-    }
-    return [
-      {
-        change,
-        headBookmark: plan.headBookmark,
-        prNumber: plan.existingPr?.number,
-      },
-    ];
+    return plan
+      ? [{ change, headBookmark: plan.headBookmark, prNumber: plan.existingPr?.number }]
+      : [];
   });
 }
 
