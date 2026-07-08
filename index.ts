@@ -36,7 +36,7 @@ import {
 } from "./lib/schema";
 import pkg from "./package.json";
 
-import { jj, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn, logItem, gitFetch, pushPreview } from "./lib/jj";
+import { jj, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn, logItem, gitFetch, pushPreview, gitPush, gitPushNamed } from "./lib/jj";
 import { unique } from "./lib/utils";
 
 let _bookmarkPrefix: string | undefined;
@@ -605,9 +605,7 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
   // revset re-resolves here, after the rebase, so it pushes the new commits.
   if (plan.pushPreview !== null || plan.rebases.length > 0) {
     spinner.text = "pushing...";
-    const pushOutput = await jj(`git push -r '${plan.revset}'`).then(
-      combineStdoutAndStderr,
-    );
+    const pushOutput = await gitPush(plan.revset);
     // After a rebase the bookmarks always moved, so a "Nothing changed."
     // push means jj refused to push them (e.g. "Won't push bookmark ...:
     // commit has no author and/or committer set") -- jj reports that as a
@@ -628,7 +626,7 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
   await Promise.all(
     plan.newBookmarks.map(async ({ headBookmark, change }) => {
       spinner.text = `pushing ${headBookmark}...`;
-      await jj(`git push --named ${headBookmark}=${change}`);
+      await gitPushNamed(headBookmark, change);
     }),
   );
 

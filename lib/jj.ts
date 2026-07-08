@@ -99,3 +99,16 @@ export async function pushPreview(revset: string): Promise<string | null> {
   if (output.endsWith("Nothing changed.")) return null;
   return output.replace("\nDry-run requested, not pushing.", "");
 }
+
+// Combined stdout+stderr because jj reports push refusals as warnings on
+// stderr with exit 0; callers inspect the text.
+export function gitPush(revset: string): Promise<string> {
+  return jj(`git push -r ${shellQuote(revset)}`).then(combineStdoutAndStderr);
+}
+
+export async function gitPushNamed(
+  bookmark: string,
+  change: string,
+): Promise<void> {
+  await jj(`git push --named ${bookmark}=${change}`);
+}
