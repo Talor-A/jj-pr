@@ -303,6 +303,39 @@ interface ExecutionPlan {
   nameWithOwner: string;
 }
 
+// Render: one summary of everything the run would do.
+function renderPlanSummary(plan: ExecutionPlan): void {
+  if (plan.rebases.length > 0) {
+    console.log("Merged PRs left the stack; stranded changes will be rebased:");
+    for (const source of plan.rebases) {
+      console.log(
+        `  PR #${source.prNumber} (${source.headRefName}) merged: $ ${rebaseCommandFor(source)}`,
+      );
+    }
+  }
+  if (plan.pushPreview !== null) {
+    console.log(plan.pushPreview.raw);
+    if (plan.rebases.length > 0) {
+      console.log(
+        "note: commit ids above are pre-rebase; the push targets the rebased commits",
+      );
+    }
+  } else if (plan.rebases.length > 0) {
+    console.log("bookmarks on rebased changes will be pushed after the rebase");
+  }
+  if (plan.newBookmarks.length > 0) {
+    console.log(
+      `New bookmarks:\n${plan.newBookmarks.map((b) => b.headBookmark).join("\n")}`,
+    );
+  }
+  if (plan.untrackedHeads.length > 0) {
+    console.log(
+      `Local bookmarks not on the remote yet:\n${plan.untrackedHeads.join("\n")}`,
+    );
+  }
+  console.log(plansToString(plan.prPlans));
+}
+
 async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
   spinner.start();
 
@@ -538,35 +571,7 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   // Render: one summary of everything the run would do.
   spinner.stop();
-  if (plan.rebases.length > 0) {
-    console.log("Merged PRs left the stack; stranded changes will be rebased:");
-    for (const source of plan.rebases) {
-      console.log(
-        `  PR #${source.prNumber} (${source.headRefName}) merged: $ ${rebaseCommandFor(source)}`,
-      );
-    }
-  }
-  if (plan.pushPreview !== null) {
-    console.log(plan.pushPreview.raw);
-    if (plan.rebases.length > 0) {
-      console.log(
-        "note: commit ids above are pre-rebase; the push targets the rebased commits",
-      );
-    }
-  } else if (plan.rebases.length > 0) {
-    console.log("bookmarks on rebased changes will be pushed after the rebase");
-  }
-  if (plan.newBookmarks.length > 0) {
-    console.log(
-      `New bookmarks:\n${plan.newBookmarks.map((b) => b.headBookmark).join("\n")}`,
-    );
-  }
-  if (plan.untrackedHeads.length > 0) {
-    console.log(
-      `Local bookmarks not on the remote yet:\n${plan.untrackedHeads.join("\n")}`,
-    );
-  }
-  console.log(plansToString(plan.prPlans));
+  renderPlanSummary(plan);
 
   if (args.dryRun) {
     const stackMarkdown = renderStackMarkdown(
