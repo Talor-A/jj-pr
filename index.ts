@@ -10,7 +10,6 @@ import {
   execWithStdin,
   mapToStdout,
   shellQuote,
-  succeeds,
 } from "./lib/exec";
 import { help, parseCli, type CliArgs } from "./lib/args";
 import { completionScript, isShell, SHELLS } from "./lib/completion";
@@ -40,7 +39,7 @@ import {
 } from "./lib/schema";
 import pkg from "./package.json";
 
-import { jj, jjCommand, jjStdoutLines } from "./lib/jj";
+import { jj, jjCommand, jjStdoutLines, configGet, hasConfig } from "./lib/jj";
 import { lines, unique } from "./lib/utils";
 
 let _bookmarkPrefix: string | undefined;
@@ -50,17 +49,11 @@ let _bookmarkPrefix: string | undefined;
 async function getBookmarkPrefix(): Promise<string> {
   if (_bookmarkPrefix !== undefined) return _bookmarkPrefix;
 
-  const configured = await jj(`config get jj-pr.bookmark-prefix`)
-    .then(mapToStdout)
-    .then((s) => s.trim())
-    .catch(() => ""); // key unset -> jj exits non-zero
+  const configured = (await configGet("jj-pr.bookmark-prefix")) ?? "";
 
   let prefix = configured;
   if (!prefix) {
-    const email = await jj(`config get user.email`)
-      .then(mapToStdout)
-      .then((s) => s.trim())
-      .catch(() => "");
+    const email = (await configGet("user.email")) ?? "";
     const user = email.split("@")[0];
     if (!user) {
       throw new Error(
@@ -236,7 +229,7 @@ async function handleFix(spinner: Ora, revset: string, dryRun: boolean) {
   spinner.start();
   spinner.text = "";
 
-  const hasFixTools = await succeeds(jjCommand(`config get fix.tools`));
+  const hasFixTools = await hasConfig("fix.tools");
 
   if (hasFixTools) {
     spinner.text = "fixing...";
