@@ -6,7 +6,6 @@ describe("parseCli", () => {
     expect(parseCli([])).toEqual({
       revision: "closest_pushable(@)",
       dryRun: false,
-      rebase: false,
       help: false,
       version: false,
     });
@@ -16,7 +15,6 @@ describe("parseCli", () => {
     expect(parseCli(["abc"])).toEqual({
       revision: "abc",
       dryRun: false,
-      rebase: false,
       help: false,
       version: false,
     });
@@ -26,7 +24,6 @@ describe("parseCli", () => {
     expect(parseCli(["--revision", "foo"])).toEqual({
       revision: "foo",
       dryRun: false,
-      rebase: false,
       help: false,
       version: false,
     });
@@ -35,7 +32,6 @@ describe("parseCli", () => {
     expect(parseCli(["-r", "foo"])).toEqual({
       revision: "foo",
       dryRun: false,
-      rebase: false,
       help: false,
       version: false,
     });

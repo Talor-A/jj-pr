@@ -6,7 +6,6 @@ const CliSchema = z.object({
   dryRun: z.boolean().default(false),
   help: z.boolean().default(false),
   version: z.boolean().default(false),
-  rebase: z.boolean().default(false),
 });
 
 export type CliArgs = z.infer<typeof CliSchema>;
@@ -23,7 +22,6 @@ Arguments:
 Options:
   -r, --revision <rev>  Revision to process (alternative to positional)
       --dry-run         Preview changes without applying them
-      --rebase          [experimental] Rebase the stack before pushing
   -h, --help            Show this help message
   -v, --version         Show version number
 
@@ -40,7 +38,6 @@ export function parseCli(argv: string[]) {
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
       revision: { type: "string", short: "r" },
-      rebase: { type: "boolean" },
     },
     allowPositionals: true,
   });
@@ -54,6 +51,5 @@ export function parseCli(argv: string[]) {
     dryRun: values["dry-run"],
     help: values.help,
     version: values.version,
-    rebase: values.rebase,
   });
 }

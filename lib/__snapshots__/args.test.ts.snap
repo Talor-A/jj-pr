@@ -12,7 +12,6 @@ Arguments:
 Options:
   -r, --revision <rev>  Revision to process (alternative to positional)
       --dry-run         Preview changes without applying them
-      --rebase          [experimental] Rebase the stack before pushing
   -h, --help            Show this help message
   -v, --version         Show version number
 

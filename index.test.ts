@@ -51,6 +51,15 @@ async function setupTempJjRepo(): Promise<{
   await $`jj --config-file ${jjconf} config set --repo jj-pr.bookmark-prefix test/jj/`
     .cwd(repo)
     .quiet();
+  // Repo-level identity for the same reason: when jj-pr itself rewrites
+  // commits (the merged-ancestor rebase), a machine with no global jj config
+  // would produce an empty committer, which `jj git push` refuses to push.
+  await $`jj --config-file ${jjconf} config set --repo user.name ${"jj-pr tests"}`
+    .cwd(repo)
+    .quiet();
+  await $`jj --config-file ${jjconf} config set --repo user.email jj-pr-tests@example.com`
+    .cwd(repo)
+    .quiet();
 
   cleanups.push(() => rm(root, { force: true, recursive: true }));
 
@@ -1539,4 +1548,519 @@ describe("main", () => {
     expect(result.stderr.toString()).toContain("nothing to do.");
     expect(result.stdout.toString()).toBe("");
   });
+});
+
+async function commitSha(repo: string, revset: string): Promise<string> {
+  return (
+    await $`jj --config-file ${jjconf} log --no-graph -r ${revset} -T commit_id`
+      .cwd(repo)
+      .text()
+  ).trim();
+}
+
+async function firstLine(repo: string, revset: string): Promise<string> {
+  return (
+    await $`jj --config-file ${jjconf} log --no-graph -r ${revset} -T ${"description.first_line()"}`
+      .cwd(repo)
+      .text()
+  ).trim();
+}
+
+async function remoteBranchSha(
+  origin: string,
+  branch: string,
+): Promise<string> {
+  const output = await $`git ls-remote ${origin} refs/heads/${branch}`.text();
+  return output.split(/\s/)[0] ?? "";
+}
+
+/**
+ * A two-PR stack (parent #1, child #2) pushed to origin, with the parent
+ * squash-merged into main on the origin the way GitHub's merge button does:
+ * main gains a single new commit "parent work (#1)" whose identity has no
+ * link to the parent branch's commits.
+ */
+async function setupSquashMergedParent(options: {
+  deleteBranch: boolean;
+  middlePr?: boolean; // also stack + squash-merge a middle PR (#2)
+}): Promise<{
+  origin: string;
+  repo: string;
+  parentSha: string;
+  middleSha?: string;
+  childSha: string;
+}> {
+  const { origin, repo } = await setupTempJjRepo();
+  const jj = new JJ(repo);
+  await setupMainBranch(repo);
+
+  await writeFile(join(repo, "parent.txt"), "parent\n");
+  await jj.describe("@", "parent work");
+  await jj.bookmark_create("@", "test/jj/parent-work");
+  await jj.git_push_bookmark("test/jj/parent-work");
+
+  let middleSha: string | undefined;
+  if (options.middlePr) {
+    await jj.new();
+    await writeFile(join(repo, "middle.txt"), "middle\n");
+    await jj.describe("@", "middle work");
+    await jj.bookmark_create("@", "test/jj/middle-work");
+    await jj.git_push_bookmark("test/jj/middle-work");
+    middleSha = await commitSha(repo, "test/jj/middle-work");
+  }
+
+  await jj.new();
+  await writeFile(join(repo, "child.txt"), "child\n");
+  await jj.describe("@", "child work");
+  await jj.bookmark_create("@", "test/jj/child-work");
+  await jj.git_push_bookmark("test/jj/child-work");
+  await jj.new();
+
+  const parentSha = await commitSha(repo, "test/jj/parent-work");
+  const childSha = await commitSha(repo, "test/jj/child-work");
+
+  const clone = await makeTempDir();
+  cleanups.push(() => rm(clone, { force: true, recursive: true }));
+  await $`git clone --branch main ${origin} ${clone}`.quiet();
+  const git = (...gitArgs: string[]) =>
+    $`git -C ${clone} -c user.name=gh -c user.email=gh@example.com ${gitArgs}`.quiet();
+  await git("merge", "--squash", "origin/test/jj/parent-work");
+  await git("commit", "-m", "parent work (#1)");
+  if (options.middlePr) {
+    await git("merge", "--squash", "origin/test/jj/middle-work");
+    await git("commit", "-m", "middle work (#2)");
+  }
+  await git("push", "origin", "main");
+  if (options.deleteBranch) {
+    await git("push", "origin", ":test/jj/parent-work");
+    if (options.middlePr) {
+      await git("push", "origin", ":test/jj/middle-work");
+    }
+  }
+
+  return { origin, repo, parentSha, middleSha, childSha };
+}
+
+function runJjPr(repo: string, statePath: string, binDir: string) {
+  return Bun.spawn(["sh", "-c", 'yes "" | "$BUN_EXE" "$JJ_PR_INDEX"'], {
+    cwd: repo,
+    env: {
+      ...process.env,
+      BUN_EXE: bun,
+      FAKE_GH_STATE: statePath,
+      JJ_PR_INDEX: pathToIndexFile,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
+async function collect(proc: ReturnType<typeof Bun.spawn>) {
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout as ReadableStream).text(),
+    new Response(proc.stderr as ReadableStream).text(),
+    proc.exited,
+  ]);
+  return { stdout, stderr, exitCode };
+}
+
+describe("merged ancestor PRs", () => {
+  const pull = (n: number) => `https://github.com/example/repo/pull/${n}`;
+
+  test("rebases a stack stranded by a squash-merged parent (branch deleted)", async () => {
+    const { origin, repo, parentSha, childSha } =
+      await setupSquashMergedParent({ deleteBranch: true });
+
+    const stackBefore = `## PR Stack\n- ${pull(2)}\n- ${pull(1)}\n- \`main\`\n`;
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 3,
+      prs: [
+        {
+          number: 1,
+          head: "test/jj/parent-work",
+          title: "parent work",
+          baseRefName: "main",
+          body: "",
+          state: "closed",
+          mergedAt: "2026-07-07T00:00:00Z",
+          headSha: parentSha,
+        },
+        {
+          number: 2,
+          head: "test/jj/child-work",
+          title: "child work",
+          baseRefName: "main", // auto-retargeted by GitHub on branch deletion
+          body: `child body\n\n${stackBefore}`,
+          headSha: childSha,
+        },
+      ],
+    });
+
+    const { stdout, stderr, exitCode } = await collect(
+      runJjPr(repo, statePath, binDir),
+    );
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain(
+      `PR #1 (test/jj/parent-work) merged: $ jj rebase -s '${parentSha}+ & mutable()' -d 'trunk()'`,
+    );
+
+    // The child now sits directly on the squash commit...
+    expect(await firstLine(repo, "test/jj/child-work-")).toBe(
+      "parent work (#1)",
+    );
+    // ...and its new commit was pushed even though the pre-rebase preview
+    // saw nothing to push.
+    const rebasedSha = await commitSha(repo, "test/jj/child-work");
+    expect(rebasedSha, `${stdout}\n${stderr}`).not.toBe(childSha);
+    expect(
+      await remoteBranchSha(origin, "test/jj/child-work"),
+      `${stdout}\n${stderr}`,
+    ).toBe(rebasedSha);
+
+    // The merged parent moved below the trunk line in the stack section.
+    const stackAfter = `## PR Stack\n- ${pull(2)}\n- \`main\`\n- ${pull(1)}\n`;
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    const childPr = ghState.prs.find(
+      (pr: { number: number }) => pr.number === 2,
+    );
+    expect(childPr.body).toBe(`child body\n\n${stackAfter}`);
+    expect(childPr.baseRefName).toBe("main");
+  }, 30000);
+
+  test("branch kept after merge: excludes the merged bookmark and retargets the child", async () => {
+    const { origin, repo, parentSha, childSha } =
+      await setupSquashMergedParent({ deleteBranch: false });
+
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 3,
+      prs: [
+        {
+          number: 1,
+          head: "test/jj/parent-work",
+          title: "parent work",
+          baseRefName: "main",
+          body: "",
+          state: "closed",
+          mergedAt: "2026-07-07T00:00:00Z",
+          headSha: parentSha,
+        },
+        {
+          number: 2,
+          head: "test/jj/child-work",
+          title: "child work",
+          baseRefName: "test/jj/parent-work", // no auto-retarget without deletion
+          body: "",
+          headSha: childSha,
+        },
+      ],
+    });
+
+    const { stdout, stderr, exitCode } = await collect(
+      runJjPr(repo, statePath, binDir),
+    );
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    // The merged bookmark must not be treated as a change to PR ("create")
+    // nor as a base rung; the child's base moves to trunk.
+    expect(stdout).not.toContain("create these PRs");
+    expect(stdout).toContain("2 main (from test/jj/parent-work)");
+    expect(stdout).toContain(`jj rebase -s '${parentSha}+ & mutable()'`);
+
+    expect(await firstLine(repo, "test/jj/child-work-")).toBe(
+      "parent work (#1)",
+    );
+    // The merged bookmark itself stays where it was, unpushed and untouched.
+    expect(await commitSha(repo, "test/jj/parent-work")).toBe(parentSha);
+    expect(await remoteBranchSha(origin, "test/jj/parent-work")).toBe(
+      parentSha,
+    );
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    const childPr = ghState.prs.find(
+      (pr: { number: number }) => pr.number === 2,
+    );
+    expect(childPr.baseRefName).toBe("main");
+  }, 30000);
+
+  test("dry run logs the rebase but changes nothing", async () => {
+    const { origin, repo, parentSha, childSha } =
+      await setupSquashMergedParent({ deleteBranch: true });
+
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 3,
+      prs: [
+        {
+          number: 1,
+          head: "test/jj/parent-work",
+          title: "parent work",
+          baseRefName: "main",
+          body: "",
+          state: "closed",
+          mergedAt: "2026-07-07T00:00:00Z",
+          headSha: parentSha,
+        },
+        {
+          number: 2,
+          head: "test/jj/child-work",
+          title: "child work",
+          baseRefName: "main",
+          body: `child body\n\n## PR Stack\n- ${pull(2)}\n- ${pull(1)}\n- \`main\`\n`,
+          headSha: childSha,
+        },
+      ],
+    });
+
+    const run = () =>
+      $`${bun} ${pathToIndexFile} --dry-run`
+        .cwd(repo)
+        .env({
+          ...process.env,
+          FAKE_GH_STATE: statePath,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        })
+        .nothrow()
+        .quiet();
+
+    const result = await run();
+    const stdout = result.stdout.toString();
+    expect(result.exitCode, `${stdout}\n${result.stderr.toString()}`).toBe(0);
+    expect(stdout).toContain(
+      `jj rebase -s '${parentSha}+ & mutable()' -d 'trunk()'`,
+    );
+    // The planned stack section already shows the merged parent in the tail.
+    expect(stdout).toContain(`- ${pull(2)}\n- \`main\`\n- ${pull(1)}`);
+    expect(stdout).toContain("would update description for PR #2");
+
+    // Nothing moved: the child still sits on the stale local parent commit,
+    // and the remote branch is untouched.
+    expect(await firstLine(repo, "test/jj/child-work-")).toBe("parent work");
+    expect(await commitSha(repo, "test/jj/child-work")).toBe(childSha);
+    expect(await remoteBranchSha(origin, "test/jj/child-work")).toBe(childSha);
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    const mutating = ghState.commands.filter(
+      (cmd: string[]) =>
+        cmd[0] === "pr" && (cmd[1] === "edit" || cmd[1] === "create"),
+    );
+    expect(mutating).toEqual([]);
+    expect(
+      ghState.commands.some((cmd: string[]) => cmd[0] === "api"),
+    ).toBe(true);
+
+    // Repeated dry runs keep reporting the same plan.
+    const again = await run();
+    expect(again.stdout.toString()).toContain(
+      `jj rebase -s '${parentSha}+ & mutable()' -d 'trunk()'`,
+    );
+  }, 30000);
+
+  test("two stacked PRs merged at once: rebases from the tipmost merged head", async () => {
+    const { repo, parentSha, middleSha, childSha } =
+      await setupSquashMergedParent({ deleteBranch: true, middlePr: true });
+
+    const stackBefore = `## PR Stack\n- ${pull(3)}\n- ${pull(2)}\n- ${pull(1)}\n- \`main\`\n`;
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 4,
+      prs: [
+        {
+          number: 1,
+          head: "test/jj/parent-work",
+          title: "parent work",
+          baseRefName: "main",
+          body: "",
+          state: "closed",
+          mergedAt: "2026-07-07T00:00:00Z",
+          headSha: parentSha,
+        },
+        {
+          number: 2,
+          head: "test/jj/middle-work",
+          title: "middle work",
+          baseRefName: "main",
+          body: "",
+          state: "closed",
+          mergedAt: "2026-07-07T01:00:00Z",
+          headSha: middleSha,
+          commits: [parentSha, middleSha!],
+        },
+        {
+          number: 3,
+          head: "test/jj/child-work",
+          title: "child work",
+          baseRefName: "main",
+          body: `child body\n\n${stackBefore}`,
+          headSha: childSha,
+        },
+      ],
+    });
+
+    const { stdout, stderr, exitCode } = await collect(
+      runJjPr(repo, statePath, binDir),
+    );
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    // One rebase, from the tipmost merged head; the deeper merged PR's
+    // commits stay behind (their content is in trunk).
+    expect(stdout).toContain(`jj rebase -s '${middleSha}+ & mutable()'`);
+    expect(stdout).not.toContain(`jj rebase -s '${parentSha}+`);
+
+    expect(await firstLine(repo, "test/jj/child-work-")).toBe(
+      "middle work (#2)",
+    );
+
+    // Both merged PRs land in the tail, newest merge first.
+    const stackAfter = `## PR Stack\n- ${pull(3)}\n- \`main\`\n- ${pull(2)}\n- ${pull(1)}\n`;
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    const childPr = ghState.prs.find(
+      (pr: { number: number }) => pr.number === 3,
+    );
+    expect(childPr.body).toBe(`child body\n\n${stackAfter}`);
+  }, 30000);
+
+  test("keeps a manually-rebased stack's merged parent in the section tail", async () => {
+    const { repo, parentSha, childSha } = await setupSquashMergedParent({
+      deleteBranch: true,
+    });
+    const jj = new JJ(repo);
+
+    // The user already did the fix by hand before running jj-pr.
+    await jj.git_fetch();
+    await jj.exec(`rebase -s '${parentSha}+ & mutable()' -d 'trunk()'`);
+
+    const stackBefore = `## PR Stack\n- ${pull(2)}\n- ${pull(1)}\n- \`main\`\n`;
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 3,
+      prs: [
+        {
+          number: 1,
+          head: "test/jj/parent-work",
+          title: "parent work",
+          baseRefName: "main",
+          body: "",
+          state: "closed",
+          mergedAt: "2026-07-07T00:00:00Z",
+          headSha: parentSha,
+        },
+        {
+          number: 2,
+          head: "test/jj/child-work",
+          title: "child work",
+          baseRefName: "main",
+          body: `child body\n\n${stackBefore}`,
+          headSha: childSha,
+        },
+      ],
+    });
+
+    const { stdout, stderr, exitCode } = await collect(
+      runJjPr(repo, statePath, binDir),
+    );
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    // Nothing to rebase -- but #1, displaced from the live stack, is
+    // confirmed merged via gh pr view and kept below the trunk line.
+    expect(stdout).not.toContain("jj rebase -s");
+    const stackAfter = `## PR Stack\n- ${pull(2)}\n- \`main\`\n- ${pull(1)}\n`;
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    const childPr = ghState.prs.find(
+      (pr: { number: number }) => pr.number === 2,
+    );
+    expect(childPr.body).toBe(`child body\n\n${stackAfter}`);
+  }, 30000);
+
+  test("closed-without-merge parent: no rebase, and it drops from the section", async () => {
+    const { repo, parentSha, childSha } = await setupSquashMergedParent({
+      deleteBranch: true,
+    });
+
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 3,
+      prs: [
+        {
+          number: 1,
+          head: "test/jj/parent-work",
+          title: "parent work",
+          baseRefName: "main",
+          body: "",
+          state: "closed",
+          mergedAt: null, // closed, not merged
+          headSha: parentSha,
+        },
+        {
+          number: 2,
+          head: "test/jj/child-work",
+          title: "child work",
+          baseRefName: "main",
+          body: `child body\n\n## PR Stack\n- ${pull(2)}\n- ${pull(1)}\n- \`main\`\n`,
+          headSha: childSha,
+        },
+      ],
+    });
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    expect(result.exitCode, `${stdout}\n${result.stderr.toString()}`).toBe(0);
+    expect(stdout).not.toContain("jj rebase -s");
+    // The closed PR is neither in the live stack nor carried in the tail.
+    expect(stdout).toContain(`- ${pull(2)}\n- \`main\`\n`);
+    expect(stdout).not.toContain(`- ${pull(1)}`);
+  }, 30000);
+
+  test("degrades to no rebase when the gh api call fails", async () => {
+    const { repo, parentSha, childSha } = await setupSquashMergedParent({
+      deleteBranch: true,
+    });
+
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 3,
+      failApi: true,
+      prs: [
+        {
+          number: 1,
+          head: "test/jj/parent-work",
+          title: "parent work",
+          baseRefName: "main",
+          body: "",
+          state: "closed",
+          mergedAt: "2026-07-07T00:00:00Z",
+          headSha: parentSha,
+        },
+        {
+          number: 2,
+          head: "test/jj/child-work",
+          title: "child work",
+          baseRefName: "main",
+          body: "",
+          headSha: childSha,
+        },
+      ],
+    });
+
+    const result = await $`${bun} ${pathToIndexFile} --dry-run`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stderr).toContain("merged-PR detection skipped");
+    expect(stdout).not.toContain("jj rebase -s");
+  }, 30000);
 });

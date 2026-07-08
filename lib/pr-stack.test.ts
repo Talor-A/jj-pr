@@ -4,6 +4,7 @@ import {
   existingBookmarkResults,
   jjLogBookmarksCommand,
   mergeBookmarkResults,
+  parsePrStackSection,
   proposedBookmarkRevset,
   renderStackMarkdown,
   type BookmarkResult,
@@ -175,5 +176,73 @@ describe("renderStackMarkdown", () => {
     expect(renderStackMarkdown([], "main", "example/repo")).toBe(
       "## PR Stack\n- `main`\n",
     );
+  });
+
+  test("renders merged ancestors below the trunk line", () => {
+    expect(
+      renderStackMarkdown(
+        [{ change: "qlruyyvy", headBookmark: "ta/jj/top", prNumber: 2 }],
+        "main",
+        "example/repo",
+        [1, 7],
+      ),
+    ).toBe(
+      "## PR Stack\n" +
+        "- https://github.com/example/repo/pull/2\n" +
+        "- `main`\n" +
+        "- https://github.com/example/repo/pull/1\n" +
+        "- https://github.com/example/repo/pull/7\n",
+    );
+  });
+});
+
+describe("parsePrStackSection", () => {
+  test("returns undefined when the body has no section", () => {
+    expect(parsePrStackSection("just a description")).toBeUndefined();
+  });
+
+  test("splits PR numbers at the trunk line", () => {
+    const body =
+      "description\n\n## PR Stack\n" +
+      "- https://github.com/x/y/pull/3\n" +
+      "- https://github.com/x/y/pull/2\n" +
+      "- `main`\n" +
+      "- https://github.com/x/y/pull/1\n";
+    expect(parsePrStackSection(body)).toEqual({
+      above: [3, 2],
+      below: [1],
+    });
+  });
+
+  test("ignores [new PR] placeholders and handles a missing tail", () => {
+    const body =
+      "## PR Stack\n- [new PR] ta/jj/top\n- https://github.com/x/y/pull/2\n- `main`\n";
+    expect(parsePrStackSection(body)).toEqual({ above: [2], below: [] });
+  });
+
+  test("reads the last section when duplicates accumulated", () => {
+    const body =
+      "## PR Stack\n- https://github.com/x/y/pull/9\n- `main`\n\n" +
+      "## PR Stack\n- https://github.com/x/y/pull/2\n- `main`\n- https://github.com/x/y/pull/1\n";
+    expect(parsePrStackSection(body)).toEqual({ above: [2], below: [1] });
+  });
+
+  test("normalizes CRLF bodies as GitHub returns them", () => {
+    const body =
+      "desc\r\n\r\n## PR Stack\r\n- https://github.com/x/y/pull/2\r\n- `main`\r\n- https://github.com/x/y/pull/1\r\n";
+    expect(parsePrStackSection(body)).toEqual({ above: [2], below: [1] });
+  });
+
+  test("round-trips what renderStackMarkdown produces", () => {
+    const rendered = renderStackMarkdown(
+      [{ change: "qlruyyvy", headBookmark: "ta/jj/top", prNumber: 2 }],
+      "main",
+      "example/repo",
+      [1],
+    );
+    expect(parsePrStackSection(`body\n\n${rendered}`)).toEqual({
+      above: [2],
+      below: [1],
+    });
   });
 });
