@@ -28,6 +28,18 @@ export type BookmarkResultWithHead = Extract<
   { headBookmark: string }
 >;
 
+// One entry per change in the stack, oldest first, answering: which
+// bookmark represents this change on GitHub?
+//   pr      — an existing bookmark that already has an open PR
+//   local   — an existing local bookmark, pushable but PR-less
+//   planned — no usable bookmark; jj-pr invented a name (not yet pushed)
+export type ResolvedBookmark =
+  | { kind: "pr"; change: string; headBookmark: string; existingPr: PullRequest }
+  | { kind: "local"; change: string; headBookmark: string; existingPr?: undefined }
+  | { kind: "planned"; change: string; headBookmark: string; existingPr?: undefined };
+
+export type PlannedBookmark = Extract<ResolvedBookmark, { kind: "planned" }>;
+
 export interface StackEntry {
   change: string;
   headBookmark: string;
