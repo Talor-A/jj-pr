@@ -19,7 +19,6 @@ import {
   type MergedAncestorPr,
 } from "./lib/merged-prs";
 import {
-  jjLogBookmarksCommand,
   mergeBookmarkResults,
   parsePrStackSection,
   proposedBookmarkRevset,
@@ -39,7 +38,7 @@ import {
 } from "./lib/schema";
 import pkg from "./package.json";
 
-import { jj, jjCommand, jjStdoutLines, configGet, hasConfig, changeIdsIn } from "./lib/jj";
+import { jj, jjCommand, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn } from "./lib/jj";
 import { lines, unique } from "./lib/utils";
 
 let _bookmarkPrefix: string | undefined;
@@ -101,9 +100,7 @@ export function bookmarkHead(bookmark: string): string {
 export async function bookmarkHeadsForChange(
   change: string,
 ): Promise<string[]> {
-  const bookmarks = lines((await exec(jjLogBookmarksCommand(change))).stdout);
-
-  return unique(bookmarks.map(bookmarkHead));
+  return unique((await bookmarksOn(change)).map(bookmarkHead));
 }
 
 async function localBookmarkHeadsForChange(change: string): Promise<string[]> {

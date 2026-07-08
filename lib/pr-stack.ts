@@ -1,16 +1,7 @@
-import { PROD_JJ_CONFIG } from "./config";
-import { shellQuote } from "./exec";
 import type { PullRequest } from "./schema";
 
 export function closestBookmarkBeforeChangeRevset(change: string): string {
   return `closest_bookmark(${change}-)`;
-}
-
-export function jjLogBookmarksCommand(
-  revset: string,
-  configFile: string = PROD_JJ_CONFIG,
-): string {
-  return `jj --config-file ${configFile} log -r ${shellQuote(revset)} --no-graph -T 'bookmarks.map(|b| b.name() ++ if(b.remote(), "@" ++ b.remote(), "")).join("\\n") ++ "\\n"'`;
 }
 
 export type BookmarkResult =

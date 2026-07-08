@@ -51,3 +51,11 @@ export function commitIdsIn(revset: string): Promise<string[]> {
     `log --no-graph -r ${shellQuote(revset)} -T 'commit_id ++ "\n"'`,
   );
 }
+
+// Bookmark names on the revisions in `revset`, remote bookmarks suffixed
+// `@<remote>` (e.g. `feature@origin`), local ones bare.
+export function bookmarksOn(revset: string): Promise<string[]> {
+  return jjStdoutLines(
+    `log -r ${shellQuote(revset)} --no-graph -T 'bookmarks.map(|b| b.name() ++ if(b.remote(), "@" ++ b.remote(), "")).join("\\n") ++ "\\n"'`,
+  );
+}

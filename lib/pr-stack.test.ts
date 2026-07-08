@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   closestBookmarkBeforeChangeRevset,
   existingBookmarkResults,
-  jjLogBookmarksCommand,
   mergeBookmarkResults,
   parsePrStackSection,
   proposedBookmarkRevset,
@@ -18,21 +17,6 @@ describe("closestBookmarkRevset", () => {
     expect(
       closestBookmarkBeforeChangeRevset("mykpnrqwkvyxuzqqntuulzxwsrvxlkxm"),
     ).toBe("closest_bookmark(mykpnrqwkvyxuzqqntuulzxwsrvxlkxm-)");
-  });
-});
-
-describe("jjLogBookmarksCommand", () => {
-  test("regression: shell-quotes revsets with parentheses", () => {
-    const change = "mykpnrqwkvyxuzqqntuulzxwsrvxlkxm";
-    const cmd = jjLogBookmarksCommand(
-      closestBookmarkBeforeChangeRevset(change),
-      "/path/to/config.toml",
-    );
-
-    expect(cmd).toContain(
-      "-r 'closest_bookmark(mykpnrqwkvyxuzqqntuulzxwsrvxlkxm-)'",
-    );
-    expect(cmd).not.toContain("-r closest_bookmark(");
   });
 });
 
