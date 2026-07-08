@@ -36,7 +36,7 @@ import {
 } from "./lib/schema";
 import pkg from "./package.json";
 
-import { jj, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn, logItem, gitFetch, pushPreview, gitPush, gitPushNamed, rebaseOntoTrunkArgs, rebaseOntoTrunk } from "./lib/jj";
+import { jj, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn, logItem, gitFetch, pushPreview, gitPush, gitPushNamed, rebaseOntoTrunkArgs, rebaseOntoTrunk, conflictedChangeIdsIn, fix } from "./lib/jj";
 import { unique } from "./lib/utils";
 
 let _bookmarkPrefix: string | undefined;
@@ -211,7 +211,7 @@ async function handleFix(spinner: Ora, revset: string, dryRun: boolean) {
 
   if (hasFixTools) {
     spinner.text = "fixing...";
-    await jj(`fix -s '(${revset}) & mutable()'`);
+    await fix(revset);
   }
 }
 
@@ -585,9 +585,7 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
     await rebaseOntoTrunk(source.headRefOid);
   }
   if (plan.rebases.length > 0) {
-    const conflicted = await jjStdoutLines(
-      `log --no-graph -r ${shellQuote(`(${plan.revset}) & conflicts()`)} -T 'change_id.short() ++ "\n"'`,
-    );
+    const conflicted = await conflictedChangeIdsIn(plan.revset);
     if (conflicted.length > 0) {
       spinner.stop();
       console.error(

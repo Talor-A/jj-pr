@@ -123,3 +123,15 @@ export function rebaseOntoTrunkArgs(headRefOid: string): string {
 export async function rebaseOntoTrunk(headRefOid: string): Promise<void> {
   await jj(rebaseOntoTrunkArgs(headRefOid));
 }
+
+// Short ids, for human-readable conflict reporting.
+export function conflictedChangeIdsIn(revset: string): Promise<string[]> {
+  return jjStdoutLines(
+    `log --no-graph -r ${shellQuote(`(${revset}) & conflicts()`)} -T 'change_id.short() ++ "\n"'`,
+  );
+}
+
+// Runs the user's configured fix tools across the mutable part of `revset`.
+export async function fix(revset: string): Promise<void> {
+  await jj(`fix -s ${shellQuote(`(${revset}) & mutable()`)}`);
+}
