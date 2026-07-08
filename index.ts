@@ -330,28 +330,24 @@ async function preferredProposedBookmarkHead(
 
   return { head: bookmarkHeads[0] };
 }
-interface PRPlanCreate {
+interface PRPlanBase {
+  headBookmark: string;
+  baseBranch: string;
+  change: string;
+}
+interface PRPlanCreate extends PRPlanBase {
   action: "create";
-  headBookmark: string;
-  baseBranch: string;
   existingPr?: undefined;
-  change: string;
 }
-interface PRPlanUpdate {
-  // base needs to move to a new branch
+// base needs to move to a new branch
+interface PRPlanUpdate extends PRPlanBase {
   action: "update";
-  headBookmark: string;
-  baseBranch: string;
   existingPr: PullRequest;
-  change: string;
 }
-interface PRPlanNoop {
-  // the base is already up-to-date
+// the base is already up-to-date
+interface PRPlanNoop extends PRPlanBase {
   action: "noop";
-  headBookmark: string;
-  baseBranch: string;
   existingPr: PullRequest;
-  change: string;
 }
 type PRPlan = PRPlanCreate | PRPlanUpdate | PRPlanNoop;
 
@@ -360,7 +356,7 @@ async function createPrPlans(
   trunk: string,
   excludeMerged: string = "",
 ): Promise<PRPlan[]> {
-  const plans = await Promise.all(
+  return Promise.all(
     bookmarksAndPRs.map(
       async ({ headBookmark, existingPr, change }): Promise<PRPlan> => {
         const baseBranch =
@@ -394,7 +390,6 @@ async function createPrPlans(
       },
     ),
   );
-  return plans;
 }
 
 function plansToString(plans: PRPlan[]): string {
