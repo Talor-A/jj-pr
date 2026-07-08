@@ -1,5 +1,5 @@
-import { execToSchema, shellQuote } from "./exec";
-import { jjStdoutLines } from "./jj";
+import { execToSchema } from "./exec";
+import { commitIdsIn } from "./jj";
 import { CommitPullsSchema } from "./schema";
 
 export interface MergedAncestorPr {
@@ -19,12 +19,6 @@ export interface MergedAncestorDetection {
 
 export function emptyDetection(): MergedAncestorDetection {
   return { merged: [], rebaseSources: [] };
-}
-
-function commitsFor(revset: string): Promise<string[]> {
-  return jjStdoutLines(
-    `log --no-graph -r ${shellQuote(revset)} -T 'commit_id ++ "\n"'`,
-  );
 }
 
 function errorText(error: unknown): string {
@@ -49,7 +43,7 @@ export async function detectMergedAncestors(
 ): Promise<MergedAncestorDetection> {
   const region = `trunk()..(${revset})`;
   const merged = new Map<number, MergedAncestorPr>();
-  const probes = await commitsFor(`roots(${region})`);
+  const probes = await commitIdsIn(`roots(${region})`);
   const probed = new Set<string>();
   let warned = false;
 
@@ -87,7 +81,7 @@ export async function detectMergedAncestors(
     // outside trunk's ancestry (a true merge commit keeps the ancestry link,
     // so nothing needs rebasing).
     const present = new Set(
-      await commitsFor(
+      await commitIdsIn(
         `(${candidates
           .map((pull) => `present(${pull.head.sha})`)
           .join(" | ")}) & ~::trunk()`,
@@ -103,7 +97,7 @@ export async function detectMergedAncestors(
       });
       // Another merged PR may sit directly above this one; probe upward.
       probes.push(
-        ...(await commitsFor(`roots((${pull.head.sha}+) & ${region})`)),
+        ...(await commitIdsIn(`roots((${pull.head.sha}+) & ${region})`)),
       );
     }
   }
@@ -114,7 +108,7 @@ export async function detectMergedAncestors(
   if (all.length === 0) return emptyDetection();
 
   const tipmost = new Set(
-    await commitsFor(
+    await commitIdsIn(
       `heads(${all.map((m) => `present(${m.headRefOid})`).join(" | ")})`,
     ),
   );

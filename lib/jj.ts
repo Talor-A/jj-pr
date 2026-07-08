@@ -45,3 +45,9 @@ export function changeIdsIn(
     `log --no-graph${reversed} -r ${shellQuote(revset)} -T 'change_id ++ "\n"'`,
   );
 }
+
+export function commitIdsIn(revset: string): Promise<string[]> {
+  return jjStdoutLines(
+    `log --no-graph -r ${shellQuote(revset)} -T 'commit_id ++ "\n"'`,
+  );
+}
