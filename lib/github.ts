@@ -21,7 +21,9 @@ export function cachePr(pr: PullRequest, head?: string): PullRequest {
   return pr;
 }
 
-export async function prForHead(head: string): Promise<PullRequest | undefined> {
+export async function prForHead(
+  head: string,
+): Promise<PullRequest | undefined> {
   if (prsByHead.has(head)) {
     return prsByHead.get(head);
   }
