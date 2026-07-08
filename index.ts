@@ -39,7 +39,7 @@ import {
 } from "./lib/schema";
 import pkg from "./package.json";
 
-import { jj, jjCommand, jjStdoutLines, configGet, hasConfig } from "./lib/jj";
+import { jj, jjCommand, jjStdoutLines, configGet, hasConfig, changeIdsIn } from "./lib/jj";
 import { lines, unique } from "./lib/utils";
 
 let _bookmarkPrefix: string | undefined;
@@ -320,10 +320,8 @@ async function preferredProposedBookmarkHead(
       .filter((item) => item.new)
       .map((item) => [item.change, item.headBookmark]),
   );
-  const closestBookmarkChanges = await jjStdoutLines(
-    `log --no-graph -r ${shellQuote(
-      `heads(trunk()..${change}- & ${proposedBookmarkRevset(bookmarksAndPRs)}${excludeMerged})`,
-    )} -T 'change_id ++ "\n"'`,
+  const closestBookmarkChanges = await changeIdsIn(
+    `heads(trunk()..${change}- & ${proposedBookmarkRevset(bookmarksAndPRs)}${excludeMerged})`,
   );
 
   const bookmarkHeads = unique(
@@ -729,9 +727,7 @@ async function doFetch(spinner: Ora) {
 // heads, which silently drops explicitly selected revisions; resolving to
 // concrete change ids first and expanding each one preserves them all.
 async function constructRevsetForRevision(revision: string): Promise<string> {
-  const revisions = await jjStdoutLines(
-    `log --no-graph --reversed -r ${shellQuote(revision)} -T 'change_id ++ "\n"'`,
-  );
+  const revisions = await changeIdsIn(revision, { reversed: true });
 
   if (revisions.length === 0) {
     return "";
@@ -786,9 +782,9 @@ export async function main(spinner: Ora, args: CliArgs) {
   const pushPreview = await planPush(revset);
 
   spinner.text = "gathering changes...";
-  const changes = await jjStdoutLines(
-    `log --no-graph --reversed -r '(${revset}) & mutable()' -T 'change_id ++ "\n"'`,
-  );
+  const changes = await changeIdsIn(`(${revset}) & mutable()`, {
+    reversed: true,
+  });
 
   if (!changes.length) {
     spinner.text = "nothing to do.";

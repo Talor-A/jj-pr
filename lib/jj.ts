@@ -33,3 +33,15 @@ export async function configGet(key: string): Promise<string | undefined> {
 export function hasConfig(key: string): Promise<boolean> {
   return succeeds(jjCommand(`config get ${shellQuote(key)}`));
 }
+
+// Change ids in `revset`, one per line. `reversed` yields oldest-first
+// (stack order).
+export function changeIdsIn(
+  revset: string,
+  opts: { reversed?: boolean } = {},
+): Promise<string[]> {
+  const reversed = opts.reversed ? " --reversed" : "";
+  return jjStdoutLines(
+    `log --no-graph${reversed} -r ${shellQuote(revset)} -T 'change_id ++ "\n"'`,
+  );
+}
