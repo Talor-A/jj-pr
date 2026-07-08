@@ -8,7 +8,6 @@ import {
   exec,
   execToSchema,
   execWithStdin,
-  mapToStdout,
   shellQuote,
 } from "./lib/exec";
 import { help, parseCli, type CliArgs } from "./lib/args";
@@ -37,8 +36,8 @@ import {
 } from "./lib/schema";
 import pkg from "./package.json";
 
-import { jj, jjCommand, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn, logItem } from "./lib/jj";
-import { lines, unique } from "./lib/utils";
+import { jj, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn, logItem } from "./lib/jj";
+import { unique } from "./lib/utils";
 
 let _bookmarkPrefix: string | undefined;
 // Resolved bookmark prefix for newly-created bookmarks. Prefers the
