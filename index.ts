@@ -393,57 +393,35 @@ async function createPrPlans(
 }
 
 function plansToString(plans: PRPlan[]): string {
-  type GroupedPlans = {
-    create: PRPlanCreate[];
-    update: PRPlanUpdate[];
-    noop: PRPlanNoop[];
-  };
-  const groupedPlans: GroupedPlans = { create: [], update: [], noop: [] };
-  plans.forEach((plan) => {
-    switch (plan.action) {
-      case "create":
-        groupedPlans.create.push(plan);
-        break;
-      case "update":
-        groupedPlans.update.push(plan);
-        break;
-      case "noop":
-        groupedPlans.noop.push(plan);
-        break;
-    }
-  });
-  let result = "";
+  const create = plans.filter((plan) => plan.action === "create");
+  const update = plans.filter((plan) => plan.action === "update");
+  const noop = plans.filter((plan) => plan.action === "noop");
 
-  if (!groupedPlans.create.length && !groupedPlans.update.length)
-    return `all PRs already up-to-date.`;
+  if (!create.length && !update.length) return `all PRs already up-to-date.`;
 
-  if (groupedPlans.create.length) {
-    result += `create these PRs:\n`;
-    result += groupedPlans.create
-      .map((plan) => `${plan.headBookmark} -> ${plan.baseBranch}`)
-      .join("\n");
-    result += "\n";
+  const sections: string[] = [];
+  if (create.length) {
+    sections.push(
+      `create these PRs:`,
+      ...create.map((plan) => `${plan.headBookmark} -> ${plan.baseBranch}`),
+    );
   }
-
-  if (groupedPlans.update.length) {
-    result += `update these PR base branches:\n`;
-    result += groupedPlans.update
-      .map(
+  if (update.length) {
+    sections.push(
+      `update these PR base branches:`,
+      ...update.map(
         (plan) =>
-          `${plan.existingPr.number} ${plan.baseBranch} (from ${plan.existingPr?.baseRefName})`,
-      )
-      .join("\n");
-    result += "\n";
+          `${plan.existingPr.number} ${plan.baseBranch} (from ${plan.existingPr.baseRefName})`,
+      ),
+    );
   }
-
-  if (groupedPlans.noop.length) {
-    result += `PRs already up-to-date:\n`;
-    result += groupedPlans.noop
-      .map((plan) => `${plan.headBookmark} (base: ${plan.baseBranch})`)
-      .join("\n");
-    result += "\n";
+  if (noop.length) {
+    sections.push(
+      `PRs already up-to-date:`,
+      ...noop.map((plan) => `${plan.headBookmark} (base: ${plan.baseBranch})`),
+    );
   }
-  return result;
+  return sections.map((line) => `${line}\n`).join("");
 }
 
 // Stack entries in `changes` order (oldest first). Plans for changes with an
