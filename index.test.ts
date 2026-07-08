@@ -1272,6 +1272,11 @@ describe("main", () => {
           (command[1] === "create" || command[1] === "edit"),
       ),
     ).toBe(false);
+
+    const ghListCalls = ghState.commands.filter(
+      (command: string[]) => command[0] === "pr" && command[1] === "list",
+    );
+    expect(ghListCalls).toHaveLength(1);
   }, 15000);
 
   test("dry run bases a child PR on a planned bookmark for its unbookmarked parent", async () => {

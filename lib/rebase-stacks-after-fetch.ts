@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { saveRebaseState } from "./rebase-state";
 import { exec, mapToStdout, shellQuote } from "./exec";
+import { parseJsonLines } from "./utils";
 
 type Operation = {
   id: string;
@@ -34,10 +35,6 @@ export type RebasePlan = {
 
 function lines(value: string): string[] {
   return value.split(/\r?\n/).filter((line) => line.length > 0);
-}
-
-function parseJsonLines<T>(schema: z.ZodType<T>, value: string): T[] {
-  return lines(value).map((line) => schema.parse(JSON.parse(line)));
 }
 
 function parseOperations(opLog: string): Operation[] {
