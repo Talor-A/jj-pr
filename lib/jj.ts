@@ -85,3 +85,7 @@ export function logItem(change: string) {
     jjCommand(`log -r ${shellQuote(change)} --no-graph -T 'json(self)'`),
   );
 }
+
+export async function gitFetch(): Promise<void> {
+  await jj(`git fetch`);
+}

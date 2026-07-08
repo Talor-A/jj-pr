@@ -36,7 +36,7 @@ import {
 } from "./lib/schema";
 import pkg from "./package.json";
 
-import { jj, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn, logItem } from "./lib/jj";
+import { jj, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn, logItem, gitFetch } from "./lib/jj";
 import { unique } from "./lib/utils";
 
 let _bookmarkPrefix: string | undefined;
@@ -696,7 +696,7 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
 async function doFetch(spinner: Ora) {
   spinner.start();
   spinner.text = "fetching...";
-  await exec(`jj git fetch`);
+  await gitFetch();
   spinner.stop();
 }
 
