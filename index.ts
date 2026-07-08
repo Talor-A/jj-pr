@@ -4,7 +4,6 @@ import { createInterface } from "node:readline/promises";
 import { constructRevset } from "./lib/revset";
 import ora, { type Ora } from "ora";
 import {
-  combineStdoutAndStderr,
   exec,
   execToSchema,
   execWithStdin,
@@ -36,7 +35,24 @@ import {
 } from "./lib/schema";
 import pkg from "./package.json";
 
-import { jj, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn, logItem, gitFetch, pushPreview, gitPush, gitPushNamed, rebaseOntoTrunkArgs, rebaseOntoTrunk, conflictedChangeIdsIn, fix } from "./lib/jj";
+import {
+  allBookmarkNames,
+  bookmarkNamesIn,
+  bookmarksOn,
+  changeIdsIn,
+  configGet,
+  conflictedChangeIdsIn,
+  fix,
+  gitFetch,
+  gitPush,
+  gitPushNamed,
+  hasConfig,
+  localBookmarksOn,
+  logItem,
+  pushPreview,
+  rebaseOntoTrunk,
+  rebaseOntoTrunkArgs,
+} from "./lib/jj";
 import { unique } from "./lib/utils";
 
 let _bookmarkPrefix: string | undefined;
