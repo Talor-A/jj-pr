@@ -43,12 +43,52 @@ export interface StackEntry {
   prNumber?: number; // absent until the PR exists
 }
 
+// Matches a generated "## PR Stack" section and the bullet list that follows.
+// Global so every prior section is stripped (a body that already accumulated
+// duplicates self-heals), and tolerant of trailing heading whitespace and
+// extra blank lines after the heading. Bodies are normalized to LF before
+// this runs, since GitHub returns PR bodies with CRLF.
+export const PR_STACK_SECTION_PATTERN =
+  /(?:^|\n)(?:<!-- GENERATED_PR_STACK -->\n)?## PR Stack[ \t]*\n\n*(?:- .+(?:\n|$))+/gm;
+
+export interface ParsedPrStack {
+  above: number[]; // PRs listed above the trunk line: the live stack
+  below: number[]; // merged PRs carried below the trunk line
+}
+
+// Reads PR numbers back out of a previously generated section, split at the
+// trunk line. Only GitHub pull URLs count; `[new PR] ...` placeholders and
+// the trunk line itself are structural. Returns undefined when the body has
+// no section.
+export function parsePrStackSection(body: string): ParsedPrStack | undefined {
+  const sections = body.replace(/\r\n/g, "\n").match(PR_STACK_SECTION_PATTERN);
+  const section = sections?.[sections.length - 1];
+  if (section === undefined) return undefined;
+
+  const numbersIn = (bullets: string[]) =>
+    bullets.flatMap((line) => {
+      const url = line.match(/\/pull\/(\d+)\s*$/);
+      return url ? [Number(url[1])] : [];
+    });
+
+  const bullets = section.split("\n").filter((line) => line.startsWith("- "));
+  const trunkIndex = bullets.findIndex((line) => /^- `[^`]+`$/.test(line));
+  if (trunkIndex === -1) return { above: numbersIn(bullets), below: [] };
+  return {
+    above: numbersIn(bullets.slice(0, trunkIndex)),
+    below: numbersIn(bullets.slice(trunkIndex + 1)),
+  };
+}
+
 // Renders the "## PR Stack" section. Entries arrive oldest-first (stack
-// order); the section lists newest-first, ending at trunk.
+// order); the section lists newest-first, ending at trunk. Merged ancestor
+// PRs stay listed below the trunk line -- their content landed in trunk, and
+// GitHub renders the bare URLs with the purple merged badge.
 export function renderStackMarkdown(
   entries: StackEntry[],
   trunk: string,
   nameWithOwner: string,
+  mergedTail: number[] = [],
 ): string {
   const lines = ["## PR Stack"];
   for (const entry of [...entries].reverse()) {
@@ -59,6 +99,9 @@ export function renderStackMarkdown(
     );
   }
   lines.push(`- \`${trunk}\``);
+  for (const number of mergedTail) {
+    lines.push(`- https://github.com/${nameWithOwner}/pull/${number}`);
+  }
   return `${lines.join("\n")}\n`;
 }
 

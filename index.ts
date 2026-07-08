@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
-import { z } from "zod";
 import { constructRevset } from "./lib/revset";
 import ora, { type Ora } from "ora";
-import { join } from "node:path";
 import {
   combineStdoutAndStderr,
   exec,
@@ -17,16 +15,16 @@ import {
 import { help, parseCli, type CliArgs } from "./lib/args";
 import { completionScript, isShell, SHELLS } from "./lib/completion";
 import {
-  findAbandonedBookmarksSince,
-  planRebasesFromAbandoned,
-  saveRebaseCheckpoint,
-  type RebasePlan,
-} from "./lib/rebase-stacks-after-fetch";
-import { absoluteGitDir, loadRebaseState } from "./lib/rebase-state";
+  detectMergedAncestors,
+  type MergedAncestorDetection,
+  type MergedAncestorPr,
+} from "./lib/merged-prs";
 import {
   jjLogBookmarksCommand,
   mergeBookmarkResults,
+  parsePrStackSection,
   proposedBookmarkRevset,
+  PR_STACK_SECTION_PATTERN,
   renderStackMarkdown,
   type BookmarkResult,
   type BookmarkResultWithHead,
@@ -34,6 +32,7 @@ import {
 } from "./lib/pr-stack";
 import {
   JJLogItemJsonSchema,
+  PrStateSchema,
   PullRequestListSchema,
   PullRequestSchema,
   RepoSchema,
@@ -76,14 +75,6 @@ async function getBookmarkPrefix(): Promise<string> {
   _bookmarkPrefix = prefix.endsWith("/") ? prefix : `${prefix}/`;
   return _bookmarkPrefix;
 }
-
-// Matches a generated "## PR Stack" section and the bullet list that follows.
-// Global so every prior section is stripped (a body that already accumulated
-// duplicates self-heals), and tolerant of trailing heading whitespace and
-// extra blank lines after the heading. Bodies are normalized to LF before this
-// runs (see bodyWithoutPrStack), since GitHub returns PR bodies with CRLF.
-const PR_STACK_SECTION_PATTERN =
-  /(?:^|\n)(?:<!-- GENERATED_PR_STACK -->\n)?## PR Stack[ \t]*\n\n*(?:- .+(?:\n|$))+/gm;
 
 async function confirm(
   message: string = "proceed? (⏎ / n)",
@@ -323,6 +314,10 @@ async function prepareNewBookmarks(
 async function preferredProposedBookmarkHead(
   change: string,
   bookmarksAndPRs: BookmarkResultWithHead[],
+  // Revset fragment excluding merged-PR heads (and their ancestry) from base
+  // candidacy: pre-rebase they still sit between trunk and the change, but
+  // the plan must match the post-rebase graph, where they are gone.
+  excludeMerged: string = "",
 ): Promise<{
   head?: string;
   existingPr?: PullRequest;
@@ -334,7 +329,7 @@ async function preferredProposedBookmarkHead(
   );
   const closestBookmarkChanges = await jjStdoutLines(
     `log --no-graph -r ${shellQuote(
-      `heads(trunk()..${change}- & ${proposedBookmarkRevset(bookmarksAndPRs)})`,
+      `heads(trunk()..${change}- & ${proposedBookmarkRevset(bookmarksAndPRs)}${excludeMerged})`,
     )} -T 'change_id ++ "\n"'`,
   );
 
@@ -388,13 +383,19 @@ type PRPlan = PRPlanCreate | PRPlanUpdate | PRPlanNoop;
 async function createPrPlans(
   bookmarksAndPRs: BookmarkResultWithHead[],
   trunk: string,
+  excludeMerged: string = "",
 ): Promise<PRPlan[]> {
   const plans = await Promise.all(
     bookmarksAndPRs.map(
       async ({ headBookmark, existingPr, change }): Promise<PRPlan> => {
         const baseBranch =
-          (await preferredProposedBookmarkHead(change, bookmarksAndPRs)).head ??
-          trunk;
+          (
+            await preferredProposedBookmarkHead(
+              change,
+              bookmarksAndPRs,
+              excludeMerged,
+            )
+          ).head ?? trunk;
 
         if (!existingPr) {
           return { action: "create", headBookmark, baseBranch, change };
@@ -567,11 +568,49 @@ async function alignPRs(spinner: Ora, plans: PRPlan[]) {
   return prsByChange;
 }
 
+// Assembles the merged-PR tail for the stack section: PRs detected as merged
+// this run, then entries displaced from the live stack and confirmed merged
+// via one `gh pr view` each (covers a stack the user already rebased by
+// hand), then entries already carried below the trunk line, which need no
+// lookup -- once below the line, always carried.
+async function mergedTailFor(
+  detection: MergedAncestorDetection,
+  liveStackNumbers: Set<number>,
+  bodies: string[],
+): Promise<number[]> {
+  const parsed = bodies.flatMap((body) => parsePrStackSection(body) ?? []);
+  const carried = parsed.flatMap((section) => section.below);
+  const detected = detection.merged.map((m) => m.prNumber);
+  const displaced = unique(parsed.flatMap((section) => section.above)).filter(
+    (number) =>
+      !liveStackNumbers.has(number) &&
+      !detected.includes(number) &&
+      !carried.includes(number),
+  );
+
+  const displacedMerged: number[] = [];
+  for (const number of displaced) {
+    const state = await execToSchema(
+      PrStateSchema,
+      `gh pr view ${String(number)} --json number,state`,
+    ).catch(() => undefined);
+    if (state?.state === "MERGED") displacedMerged.push(number);
+  }
+
+  return unique([...detected, ...displacedMerged, ...carried]);
+}
+
+function rebaseCommandFor(source: MergedAncestorPr): string {
+  return `jj rebase -s '${source.headRefOid}+ & mutable()' -d 'trunk()'`;
+}
+
 // Everything a run would do, gathered read-only so it can be rendered and
 // confirmed as a whole before anything mutates.
 interface ExecutionPlan {
   revset: string;
   pushPreview: string | null; // from planPush
+  rebases: MergedAncestorPr[]; // stranded stacks to rebase onto trunk first
+  mergedTail: number[]; // merged ancestor PRs kept below the trunk line
   newBookmarks: BookmarkResultWithHead[]; // named but NOT yet pushed (new: true)
   prPlans: PRPlan[];
   changes: string[]; // oldest-first change ids
@@ -582,9 +621,49 @@ interface ExecutionPlan {
 async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
   spinner.start();
 
-  if (plan.pushPreview !== null) {
+  for (const source of plan.rebases) {
+    spinner.text = `rebasing changes stranded above merged PR #${source.prNumber}...`;
+    await jj(
+      `rebase -s ${shellQuote(`${source.headRefOid}+ & mutable()`)} -d 'trunk()'`,
+    );
+  }
+  if (plan.rebases.length > 0) {
+    const conflicted = await jjStdoutLines(
+      `log --no-graph -r ${shellQuote(`(${plan.revset}) & conflicts()`)} -T 'change_id.short() ++ "\n"'`,
+    );
+    if (conflicted.length > 0) {
+      spinner.stop();
+      console.error(
+        `rebase produced conflicts in: ${conflicted.join(", ")}\n` +
+          "resolve them and re-run jj pr; nothing was pushed.",
+      );
+      process.exit(1);
+    }
+  }
+
+  // A rebase moves bookmarks sideways even when the pre-rebase preview saw
+  // nothing to push, so the push cannot be skipped on preview alone. The
+  // revset re-resolves here, after the rebase, so it pushes the new commits.
+  if (plan.pushPreview !== null || plan.rebases.length > 0) {
     spinner.text = "pushing...";
-    await jj(`git push -r '${plan.revset}'`);
+    const pushOutput = await jj(`git push -r '${plan.revset}'`).then(
+      combineStdoutAndStderr,
+    );
+    // After a rebase the bookmarks always moved, so a "Nothing changed."
+    // push means jj refused to push them (e.g. "Won't push bookmark ...:
+    // commit has no author and/or committer set") -- jj reports that as a
+    // warning with exit 0, so surface it or the run silently claims success.
+    if (
+      plan.rebases.length > 0 &&
+      pushOutput.trim().endsWith("Nothing changed.")
+    ) {
+      spinner.stop();
+      console.error(
+        `rebase succeeded but the push moved nothing:\n${pushOutput.trim()}\n` +
+          "the remote still has the pre-rebase commits; nothing else was updated.",
+      );
+      process.exit(1);
+    }
   }
 
   await Promise.all(
@@ -603,6 +682,7 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
     })),
     plan.trunk,
     plan.nameWithOwner,
+    plan.mergedTail,
   );
 
   spinner.text = "updating descriptions...";
@@ -651,58 +731,6 @@ async function doFetch(spinner: Ora) {
   spinner.stop();
 }
 
-async function doRebase(spinner: Ora, dryRun: boolean, gitDir: string) {
-  spinner.start();
-  spinner.text = "planning rebase...";
-
-  const state = await loadRebaseState(gitDir);
-  const { abandoned, stalePointer } = await findAbandonedBookmarksSince(
-    state?.lastCheckedOp ?? null,
-  );
-
-  if (stalePointer) {
-    spinner.stop();
-    console.log(
-      "Rebase checkpoint not found in current op history; resetting checkpoint.",
-    );
-    spinner.start();
-  }
-
-  if (abandoned.length === 0) {
-    if (!dryRun) {
-      await saveRebaseCheckpoint(gitDir);
-    }
-    return;
-  }
-
-  const plans: RebasePlan[] = await planRebasesFromAbandoned(abandoned);
-
-  if (plans.length === 0) {
-    if (!dryRun) {
-      await saveRebaseCheckpoint(gitDir);
-    }
-    return;
-  }
-  spinner.stop();
-  for (const plan of plans) {
-    console.log(
-      `${plan.bookmark.name}: ${plan.bookmark.previousCommit} -> absent`,
-    );
-    console.log(`roots above it: ${plan.roots.join(", ")}`);
-
-    const cmd = `jj rebase ${[...plan.roots.flatMap((root) => ["-s", root])].join(" ")} -d 'trunk()'`;
-    if (dryRun) {
-      console.log(`$ ${cmd}`);
-    } else {
-      await exec(cmd);
-    }
-  }
-
-  if (!dryRun) {
-    await saveRebaseCheckpoint(gitDir);
-  }
-}
-
 // Expands the user-supplied -r value into a revset covering every revision it
 // resolves to. constructRevset collapses a compound revset like "a|b" to its
 // heads, which silently drops explicitly selected revisions; resolving to
@@ -721,20 +749,40 @@ async function constructRevsetForRevision(revision: string): Promise<string> {
 
 export async function main(spinner: Ora, args: CliArgs) {
   const trunk = await ensureTrunk();
-  const gitDir = await absoluteGitDir();
 
   await doFetch(spinner);
 
-  if (args.rebase) {
-    await doRebase(spinner, args.dryRun, gitDir);
-  }
-
-  const revset = await constructRevsetForRevision(args.revision);
-  if (!revset) {
+  const userRevset = await constructRevsetForRevision(args.revision);
+  if (!userRevset) {
     spinner.text = "nothing to do.";
     spinner.stopAndPersist();
     process.exit(0);
   }
+
+  const repo = await execToSchema(
+    RepoSchema,
+    `gh repo view --json nameWithOwner`,
+  );
+
+  // Read-only: probes the stack's base commits against GitHub to find PRs
+  // that merged underneath it (see lib/merged-prs.ts).
+  spinner.start();
+  spinner.text = "checking for merged ancestor PRs...";
+  const detection = await detectMergedAncestors(
+    userRevset,
+    repo.nameWithOwner,
+  );
+
+  // Plan everything as if the rebase already ran: merged heads and their
+  // ancestry drop out of the working revset (their content landed in trunk),
+  // so bookmark and base planning match the post-rebase graph. The actual
+  // `jj rebase` only runs in executePlan, after the confirm prompt.
+  const excludeMerged =
+    detection.rebaseSources.length > 0
+      ? ` & ~::(${detection.rebaseSources.map((m) => m.headRefOid).join(" | ")})`
+      : "";
+  const revset =
+    excludeMerged === "" ? userRevset : `(${userRevset})${excludeMerged}`;
 
   await handleFix(spinner, revset, args.dryRun);
 
@@ -760,21 +808,31 @@ export async function main(spinner: Ora, args: CliArgs) {
   const bookmarksAndPRs = mergeBookmarkResults(bookmarkResults, newBookmarks);
 
   spinner.text = "planning pr changes...";
-  const prPlans = await createPrPlans(bookmarksAndPRs, trunk);
+  const prPlans = await createPrPlans(bookmarksAndPRs, trunk, excludeMerged);
 
   // this should never happen.
   if (prPlans.length === 0) {
     throw new Error("no plans to execute");
   }
 
-  const repo = await execToSchema(
-    RepoSchema,
-    `gh repo view --json nameWithOwner`,
+  const existingPrBodies = prPlans.flatMap((prPlan) =>
+    prPlan.existingPr?.body ? [prPlan.existingPr.body] : [],
+  );
+  const mergedTail = await mergedTailFor(
+    detection,
+    new Set(
+      prPlans.flatMap((prPlan) =>
+        prPlan.existingPr ? [prPlan.existingPr.number] : [],
+      ),
+    ),
+    existingPrBodies,
   );
 
   const plan: ExecutionPlan = {
     revset,
     pushPreview,
+    rebases: detection.rebaseSources,
+    mergedTail,
     newBookmarks,
     prPlans,
     changes,
@@ -784,8 +842,23 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   // Render: one summary of everything the run would do.
   spinner.stop();
+  if (plan.rebases.length > 0) {
+    console.log("Merged PRs left the stack; stranded changes will be rebased:");
+    for (const source of plan.rebases) {
+      console.log(
+        `  PR #${source.prNumber} (${source.headRefName}) merged: $ ${rebaseCommandFor(source)}`,
+      );
+    }
+  }
   if (plan.pushPreview !== null) {
     console.log(plan.pushPreview);
+    if (plan.rebases.length > 0) {
+      console.log(
+        "note: commit ids above are pre-rebase; the push targets the rebased commits",
+      );
+    }
+  } else if (plan.rebases.length > 0) {
+    console.log("bookmarks on rebased changes will be pushed after the rebase");
   }
   if (plan.newBookmarks.length > 0) {
     console.log(
@@ -799,6 +872,7 @@ export async function main(spinner: Ora, args: CliArgs) {
       stackEntriesForPlans(plan.prPlans, plan.changes),
       plan.trunk,
       plan.nameWithOwner,
+      plan.mergedTail,
     );
     console.log(stackMarkdown);
     for (const prPlan of plan.prPlans) {
@@ -814,10 +888,12 @@ export async function main(spinner: Ora, args: CliArgs) {
     return;
   }
 
-  // Confirm: one prompt covering the pushes, PR creations, and retargets.
-  // Description upkeep alone (everything already up-to-date) needs none.
+  // Confirm: one prompt covering the rebases, pushes, PR creations, and
+  // retargets. Description upkeep alone (everything already up-to-date)
+  // needs none.
   const onlyDescriptionUpkeep =
     plan.pushPreview === null &&
+    plan.rebases.length === 0 &&
     plan.newBookmarks.length === 0 &&
     plan.prPlans.every((prPlan) => prPlan.action === "noop");
   if (!onlyDescriptionUpkeep) {

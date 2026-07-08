@@ -7,12 +7,28 @@ interface FakePullRequest {
   title: string;
   baseRefName: string;
   body: string;
+  state?: "open" | "closed";
+  mergedAt?: string | null;
+  headSha?: string;
+  mergeCommitSha?: string;
+  commits?: string[]; // shas the PR's branch contained, for the api handler
 }
 
 interface FakeGhState {
   nextNumber: number;
   prs: FakePullRequest[];
   commands?: string[][];
+  failApi?: boolean; // make `gh api` calls fail, to test degraded detection
+}
+
+function isOpen(pr: FakePullRequest): boolean {
+  return (pr.state ?? "open") === "open";
+}
+
+// gh's GraphQL state enum, as `gh pr view --json state` reports it.
+function graphqlState(pr: FakePullRequest): string {
+  if (isOpen(pr)) return "OPEN";
+  return pr.mergedAt ? "MERGED" : "CLOSED";
 }
 
 function getOption(args: string[], option: string): string {
@@ -70,11 +86,45 @@ if (args[0] === "repo" && args[1] === "view") {
 }
 
 if (args[0] === "pr" && args[1] === "list") {
+  // Real `gh pr list` returns only open PRs unless --state says otherwise.
   const head = getOption(args, "--head");
   console.log(
-    JSON.stringify(state.prs.filter((pr) => pr.head === head).map(prJson)),
+    JSON.stringify(
+      state.prs.filter((pr) => isOpen(pr) && pr.head === head).map(prJson),
+    ),
   );
   process.exit(0);
+}
+
+// "List pull requests associated with a commit". Matches PRs whose recorded
+// branch commits (or head sha) include the probed sha.
+if (args[0] === "api") {
+  const pulls = args[1]?.match(
+    /^repos\/[^/]+\/[^/]+\/commits\/([^/]+)\/pulls$/,
+  );
+  if (pulls) {
+    if (state.failApi) {
+      console.error("gh: Internal Server Error (HTTP 500)");
+      process.exit(1);
+    }
+    const sha = pulls[1];
+    const matches = state.prs.filter(
+      (pr) => pr.headSha === sha || pr.commits?.includes(sha ?? ""),
+    );
+    console.log(
+      JSON.stringify(
+        matches.map((pr) => ({
+          number: pr.number,
+          state: isOpen(pr) ? "open" : "closed",
+          merged_at: pr.mergedAt ?? null,
+          merge_commit_sha: pr.mergeCommitSha ?? null,
+          head: { ref: pr.head, sha: pr.headSha ?? "" },
+          base: { ref: pr.baseRefName },
+        })),
+      ),
+    );
+    process.exit(0);
+  }
 }
 
 if (args[0] === "pr" && args[1] === "create") {
@@ -93,7 +143,8 @@ if (args[0] === "pr" && args[1] === "view") {
   const number = Number(args[2]);
   const pr = state.prs.find((item) => item.number === number);
   if (!pr) throw new Error(`No fake PR #${number}`);
-  console.log(JSON.stringify(prJson(pr)));
+  // Extra fields are harmless: the schemas strip what they didn't ask for.
+  console.log(JSON.stringify({ ...prJson(pr), state: graphqlState(pr) }));
   process.exit(0);
 }
 

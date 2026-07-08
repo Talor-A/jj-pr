@@ -32,6 +32,26 @@ export const RepoSchema = z.preprocess(
   parseJsonPreprocessor,
   z.object({ nameWithOwner: z.string() }),
 );
+// REST "list pull requests associated with a commit". REST has no "merged"
+// state: merged means state "closed" plus a non-null merged_at.
+export const CommitPullsSchema = z.preprocess(
+  parseJsonPreprocessor,
+  z.array(
+    z.object({
+      number: z.number(),
+      state: z.string(),
+      merged_at: z.string().nullable(),
+      merge_commit_sha: z.string().nullable(),
+      head: z.object({ ref: z.string(), sha: z.string() }),
+      base: z.object({ ref: z.string() }),
+    }),
+  ),
+);
+// `gh pr view --json state` uses GraphQL enums: OPEN | CLOSED | MERGED.
+export const PrStateSchema = z.preprocess(
+  parseJsonPreprocessor,
+  z.object({ number: z.number(), state: z.string() }),
+);
 export const JJLogItemJsonSchema = z.preprocess(
   parseJsonPreprocessor,
   z.object({
