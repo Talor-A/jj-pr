@@ -1,5 +1,5 @@
 import { PROD_JJ_CONFIG } from "./config";
-import { exec, execToSchema, mapToStdout, shellQuote, succeeds } from "./exec";
+import { exec, execToSchema, mapToStdout, shellQuote, succeeds, combineStdoutAndStderr } from "./exec";
 import { JJLogItemJsonSchema } from "./schema";
 import { lines } from "./utils";
 
@@ -88,4 +88,14 @@ export function logItem(change: string) {
 
 export async function gitFetch(): Promise<void> {
   await jj(`git fetch`);
+}
+
+// Dry-run push preview for `revset`: the human-readable summary jj prints,
+// or null when jj reports nothing to push. Strips the dry-run disclaimer.
+export async function pushPreview(revset: string): Promise<string | null> {
+  const output = await jj(`git push --dry-run -r ${shellQuote(revset)}`)
+    .then(combineStdoutAndStderr)
+    .then((s) => s.trim());
+  if (output.endsWith("Nothing changed.")) return null;
+  return output.replace("\nDry-run requested, not pushing.", "");
 }

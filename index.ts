@@ -36,7 +36,7 @@ import {
 } from "./lib/schema";
 import pkg from "./package.json";
 
-import { jj, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn, logItem, gitFetch } from "./lib/jj";
+import { jj, jjStdoutLines, configGet, hasConfig, changeIdsIn, bookmarksOn, localBookmarksOn, allBookmarkNames, bookmarkNamesIn, logItem, gitFetch, pushPreview } from "./lib/jj";
 import { unique } from "./lib/utils";
 
 let _bookmarkPrefix: string | undefined;
@@ -184,16 +184,6 @@ function sanitizeBookmarkDescription(
     .replace(/-+$/g, "");
 
   return slug || fallback;
-}
-
-// Gather half: read-only. Returns the human-readable push preview, or null
-// when jj reports nothing to push. Strips jj's dry-run disclaimer line.
-async function planPush(revset: string): Promise<string | null> {
-  const output = await jj(`git push --dry-run -r '${revset}'`)
-    .then(combineStdoutAndStderr)
-    .then((s) => s.trim());
-  if (output.endsWith("Nothing changed.")) return null;
-  return output.replace("\nDry-run requested, not pushing.", "");
 }
 
 async function ensureTrunk(): Promise<string> {
@@ -577,7 +567,7 @@ function rebaseCommandFor(source: MergedAncestorPr): string {
 // confirmed as a whole before anything mutates.
 interface ExecutionPlan {
   revset: string;
-  pushPreview: string | null; // from planPush
+  pushPreview: string | null; // from pushPreview
   rebases: MergedAncestorPr[]; // stranded stacks to rebase onto trunk first
   mergedTail: number[]; // merged ancestor PRs kept below the trunk line
   newBookmarks: BookmarkResultWithHead[]; // named but NOT yet pushed (new: true)
@@ -757,7 +747,7 @@ export async function main(spinner: Ora, args: CliArgs) {
   // GitHub until the whole plan has been rendered and confirmed.
   spinner.start();
   spinner.text = "planning push...";
-  const pushPreview = await planPush(revset);
+  const pushPreviewResult = await pushPreview(revset);
 
   spinner.text = "gathering changes...";
   const changes = await changeIdsIn(`(${revset}) & mutable()`, {
@@ -797,7 +787,7 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   const plan: ExecutionPlan = {
     revset,
-    pushPreview,
+    pushPreview: pushPreviewResult,
     rebases: detection.rebaseSources,
     mergedTail,
     newBookmarks,
