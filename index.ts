@@ -30,11 +30,11 @@ import {
   type StackEntry,
 } from "./lib/pr-stack";
 import { parsePushPreview, type PushMove } from "./lib/push-plan";
+import { cachePr, prForHead, prForNumber } from "./lib/github";
 import {
   JJLogItemJsonSchema,
   PrStateSchema,
   PullRequestListSchema,
-  PullRequestSchema,
   RepoSchema,
   type PullRequest,
 } from "./lib/schema";
@@ -117,48 +117,6 @@ async function localBookmarkHeadsForChange(change: string): Promise<string[]> {
   return unique(
     await jjStdoutLines(
       `log -r ${shellQuote(change)} --no-graph -T 'local_bookmarks.map(|b| b.name()).join("\\n") ++ "\\n"'`,
-    ),
-  );
-}
-
-const prsByHead = new Map<string, PullRequest>();
-const prsByNumber = new Map<number, PullRequest>();
-
-function cachePr(pr: PullRequest, head?: string): PullRequest {
-  if (head) {
-    prsByHead.set(head, pr);
-  }
-  prsByNumber.set(pr.number, pr);
-  return pr;
-}
-
-async function prForHead(head: string): Promise<PullRequest | undefined> {
-  if (prsByHead.has(head)) {
-    return prsByHead.get(head);
-  }
-
-  const existingPrs = await execToSchema(
-    PullRequestListSchema,
-    `gh pr list --head ${head} --json number,title,baseRefName,body`,
-  );
-
-  if (existingPrs[0]) {
-    cachePr(existingPrs[0], head);
-  }
-
-  return existingPrs[0];
-}
-
-async function prForNumber(number: number): Promise<PullRequest> {
-  const cached = prsByNumber.get(number);
-  if (cached) {
-    return cached;
-  }
-
-  return cachePr(
-    await execToSchema(
-      PullRequestSchema,
-      `gh pr view ${String(number)} --json number,title,baseRefName,body`,
     ),
   );
 }
