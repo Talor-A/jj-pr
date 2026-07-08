@@ -64,6 +64,18 @@ export interface StackEntry {
 export const PR_STACK_SECTION_PATTERN =
   /(?:^|\n)(?:<!-- GENERATED_PR_STACK -->\n)?## PR Stack[ \t]*\n\n*(?:- .+(?:\n|$))+/gm;
 
+export function bodyWithoutPrStack(body: string): string {
+  // GitHub returns PR bodies with CRLF line endings, but we author them with
+  // LF. Normalize first so the pattern matches on round-trips; otherwise the
+  // old section is left in place and a duplicate gets appended.
+  const stripped = body
+    .replace(/\r\n/g, "\n")
+    .replace(PR_STACK_SECTION_PATTERN, "")
+    .trimEnd();
+
+  return stripped.length > 0 ? `${stripped}\n\n` : "";
+}
+
 export interface ParsedPrStack {
   above: number[]; // PRs listed above the trunk line: the live stack
   below: number[]; // merged PRs carried below the trunk line

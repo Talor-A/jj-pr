@@ -20,9 +20,9 @@ import {
   type MergedAncestorPr,
 } from "./lib/merged-prs";
 import {
+  bodyWithoutPrStack,
   jjLogBookmarksCommand,
   parsePrStackSection,
-  PR_STACK_SECTION_PATTERN,
   renderStackMarkdown,
   type PlannedBookmark,
   type PRPlan,
@@ -51,18 +51,6 @@ async function confirm(
   rl.close();
   if (reply === "") return acceptEmpty;
   return /^[Yy]/.test(reply);
-}
-
-export function bodyWithoutPrStack(body: string): string {
-  // GitHub returns PR bodies with CRLF line endings, but we author them with
-  // LF. Normalize first so the pattern matches on round-trips; otherwise the
-  // old section is left in place and a duplicate gets appended.
-  const stripped = body
-    .replace(/\r\n/g, "\n")
-    .replace(PR_STACK_SECTION_PATTERN, "")
-    .trimEnd();
-
-  return stripped.length > 0 ? `${stripped}\n\n` : "";
 }
 
 // A push plan: `raw` is jj's own preview text (still what gets rendered --
@@ -622,6 +610,7 @@ export async function main(spinner: Ora, args: CliArgs) {
 }
 
 export { bookmarkHead, bookmarkHeadsForChange } from "./lib/bookmarks";
+export { bodyWithoutPrStack } from "./lib/pr-stack";
 
 if (import.meta.main) {
   const rawArgs = process.argv.slice(2);
