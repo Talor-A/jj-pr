@@ -512,8 +512,51 @@ async function prTitleAndBody(
   const [summary = "", ...rest] = item.description.split(/\r?\n/);
   return {
     title: summary.trim() || fallbackTitle,
-    body: rest.join("\n").trim(),
+    body: unwrapHardWrappedText(rest.join("\n")),
   };
+}
+
+// Lines that start a new markdown block rather than continuing a wrapped
+// prose line: list items, headings, blockquotes, code fences.
+const MARKDOWN_BLOCK_START = /^\s*([-*+]\s|\d+[.)]\s|#{1,6}\s|>|```|~~~)/;
+const CODE_FENCE = /^\s*(```|~~~)/;
+
+// jj/git commit messages are conventionally hard-wrapped at ~80 chars. Join
+// wrapped lines back into paragraphs so the PR body renders as intended
+// markdown. Blank lines stay as paragraph breaks, lines that look like list
+// items/headings/etc. start a new line instead of being joined into the
+// previous one, and fenced code blocks are passed through verbatim.
+export function unwrapHardWrappedText(text: string): string {
+  const lines = text.trim().split(/\r?\n/);
+  const out: string[] = [];
+  let inCodeFence = false;
+  if (lines.some((line) => line.length > 80)) return text;
+
+  for (const line of lines) {
+    if (inCodeFence) {
+      out.push(line);
+      if (CODE_FENCE.test(line)) inCodeFence = false;
+      continue;
+    }
+    if (CODE_FENCE.test(line)) {
+      inCodeFence = true;
+      out.push(line);
+      continue;
+    }
+    const trimmed = line.trim();
+    const prev = out.at(-1);
+    if (
+      trimmed !== "" &&
+      prev !== undefined &&
+      prev !== "" &&
+      !MARKDOWN_BLOCK_START.test(line)
+    ) {
+      out[out.length - 1] = `${prev} ${trimmed}`;
+    } else {
+      out.push(trimmed);
+    }
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n");
 }
 
 async function alignPRs(spinner: Ora, plans: PRPlan[]) {
@@ -768,10 +811,7 @@ export async function main(spinner: Ora, args: CliArgs) {
   // that merged underneath it (see lib/merged-prs.ts).
   spinner.start();
   spinner.text = "checking for merged ancestor PRs...";
-  const detection = await detectMergedAncestors(
-    userRevset,
-    repo.nameWithOwner,
-  );
+  const detection = await detectMergedAncestors(userRevset, repo.nameWithOwner);
 
   // Plan everything as if the rebase already ran: merged heads and their
   // ancestry drop out of the working revset (their content landed in trunk),
