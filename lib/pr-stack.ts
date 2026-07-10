@@ -13,29 +13,17 @@ export function jjLogBookmarksCommand(
   return `jj --config-file ${configFile} log -r ${shellQuote(revset)} --no-graph -T 'bookmarks.map(|b| b.name() ++ if(b.remote(), "@" ++ b.remote(), "")).join("\\n") ++ "\\n"'`;
 }
 
-export type BookmarkResult =
-  | {
-      headBookmark: string;
-      existingPr: PullRequest;
-      change: string;
-      new?: true;
-    }
-  | {
-      headBookmark: string;
-      existingPr: undefined;
-      change: string;
-      new?: true;
-    }
-  | {
-      headBookmark: undefined;
-      existingPr: undefined;
-      change: string;
-    };
+// One entry per change in the stack, oldest first, answering: which
+// bookmark represents this change on GitHub?
+//   pr      — an existing bookmark that already has an open PR
+//   local   — an existing local bookmark, pushable but PR-less
+//   planned — no usable bookmark; jj-pr invented a name (not yet pushed)
+export type ResolvedBookmark =
+  | { kind: "pr"; change: string; headBookmark: string; existingPr: PullRequest }
+  | { kind: "local"; change: string; headBookmark: string; existingPr?: undefined }
+  | { kind: "planned"; change: string; headBookmark: string; existingPr?: undefined };
 
-export type BookmarkResultWithHead = Extract<
-  BookmarkResult,
-  { headBookmark: string }
->;
+export type PlannedBookmark = Extract<ResolvedBookmark, { kind: "planned" }>;
 
 export interface StackEntry {
   change: string;
@@ -111,26 +99,11 @@ export function renderStackMarkdown(
 // `heads(trunk()..X & proposedBookmarkRevset(...))` stays equivalent to the
 // `closest_bookmark(X)` alias in config.toml.
 export function proposedBookmarkRevset(
-  bookmarksAndPRs: BookmarkResultWithHead[],
+  bookmarks: ResolvedBookmark[],
 ): string {
-  const plannedNewChanges = bookmarksAndPRs
-    .filter((item) => item.new)
+  const plannedNewChanges = bookmarks
+    .filter((item) => item.kind === "planned")
     .map((item) => item.change);
   if (plannedNewChanges.length === 0) return "bookmarks()";
   return `(bookmarks() | ${plannedNewChanges.join(" | ")})`;
-}
-
-export function existingBookmarkResults(
-  bookmarksAndPRs: BookmarkResult[],
-): BookmarkResultWithHead[] {
-  return bookmarksAndPRs.filter(
-    (item): item is BookmarkResultWithHead => item.headBookmark !== undefined,
-  );
-}
-
-export function mergeBookmarkResults(
-  bookmarksAndPRs: BookmarkResult[],
-  newlyPrepared: BookmarkResultWithHead[],
-): BookmarkResultWithHead[] {
-  return [...existingBookmarkResults(bookmarksAndPRs), ...newlyPrepared];
 }
