@@ -212,6 +212,35 @@ async function planPush(revset: string): Promise<string | null> {
   return output.replace("\nDry-run requested, not pushing.", "");
 }
 
+// Gather half: read-only. `jj git push -r` only pushes bookmarks that already
+// track the remote; a bookmark the user created locally and never pushed is
+// skipped with a warning ("Refusing to create new remote bookmark ...") that
+// still ends in "Nothing changed.", so planPush sees nothing to push and the
+// later `gh pr create` fails with "Head ref must be a branch". Returns the
+// subset of `names` that exist as local bookmarks but track no real remote
+// (the `git` pseudo-remote doesn't count); those need an explicit
+// `git push --bookmark`, which is allowed to create the remote ref.
+async function untrackedLocalBookmarks(
+  revset: string,
+  names: string[],
+): Promise<string[]> {
+  if (names.length === 0) return [];
+  const entries = await jjStdoutLines(
+    `bookmark list --all-remotes -r '(${revset})' -T 'name ++ "\t" ++ remote ++ "\t" ++ if(remote, tracked, present) ++ "\n"'`,
+  );
+  const localPresent = new Set<string>();
+  const tracked = new Set<string>();
+  for (const entry of entries) {
+    const [name, remote, flag] = entry.split("\t");
+    if (!name || flag !== "true") continue;
+    if (!remote) localPresent.add(name);
+    else if (remote !== "git") tracked.add(name);
+  }
+  return names.filter(
+    (name) => localPresent.has(name) && !tracked.has(name),
+  );
+}
+
 async function ensureTrunk(): Promise<string> {
   const trunk = await jj(`bookmark list -r 'trunk()' -T 'name ++ "\n"'`)
     .then(mapToStdout)
@@ -612,6 +641,7 @@ interface ExecutionPlan {
   rebases: MergedAncestorPr[]; // stranded stacks to rebase onto trunk first
   mergedTail: number[]; // merged ancestor PRs kept below the trunk line
   newBookmarks: BookmarkResultWithHead[]; // named but NOT yet pushed (new: true)
+  untrackedHeads: string[]; // pre-existing local head bookmarks tracking no remote
   prPlans: PRPlan[];
   changes: string[]; // oldest-first change ids
   trunk: string;
@@ -666,12 +696,16 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
     }
   }
 
-  await Promise.all(
-    plan.newBookmarks.map(async ({ headBookmark, change }) => {
+  await Promise.all([
+    ...plan.newBookmarks.map(async ({ headBookmark, change }) => {
       spinner.text = `pushing ${headBookmark}...`;
       await jj(`git push --named ${headBookmark}=${change}`);
     }),
-  );
+    ...plan.untrackedHeads.map(async (name) => {
+      spinner.text = `pushing ${name}...`;
+      await jj(`git push --bookmark ${shellQuote(name)}`);
+    }),
+  ]);
 
   const prInfo = await alignPRs(spinner, plan.prPlans);
 
@@ -815,6 +849,14 @@ export async function main(spinner: Ora, args: CliArgs) {
     throw new Error("no plans to execute");
   }
 
+  const newBookmarkNames = new Set(newBookmarks.map((b) => b.headBookmark));
+  const untrackedHeads = await untrackedLocalBookmarks(
+    revset,
+    unique(prPlans.map((prPlan) => prPlan.headBookmark)).filter(
+      (name) => !newBookmarkNames.has(name),
+    ),
+  );
+
   const existingPrBodies = prPlans.flatMap((prPlan) =>
     prPlan.existingPr?.body ? [prPlan.existingPr.body] : [],
   );
@@ -834,6 +876,7 @@ export async function main(spinner: Ora, args: CliArgs) {
     rebases: detection.rebaseSources,
     mergedTail,
     newBookmarks,
+    untrackedHeads,
     prPlans,
     changes,
     trunk,
@@ -863,6 +906,11 @@ export async function main(spinner: Ora, args: CliArgs) {
   if (plan.newBookmarks.length > 0) {
     console.log(
       `New bookmarks:\n${plan.newBookmarks.map((b) => b.headBookmark).join("\n")}`,
+    );
+  }
+  if (plan.untrackedHeads.length > 0) {
+    console.log(
+      `Local bookmarks not on the remote yet:\n${plan.untrackedHeads.join("\n")}`,
     );
   }
   console.log(plansToString(plan.prPlans));
@@ -895,6 +943,7 @@ export async function main(spinner: Ora, args: CliArgs) {
     plan.pushPreview === null &&
     plan.rebases.length === 0 &&
     plan.newBookmarks.length === 0 &&
+    plan.untrackedHeads.length === 0 &&
     plan.prPlans.every((prPlan) => prPlan.action === "noop");
   if (!onlyDescriptionUpkeep) {
     const confirmed = await confirm("apply these changes? (⏎ / n)");
