@@ -752,6 +752,63 @@ describe("main", () => {
     ]);
   }, 15000);
 
+  test("regression: pushes a pre-created untracked bookmark before creating its PR", async () => {
+    const { origin, repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    // The user created the bookmark themselves and never pushed it, so it
+    // tracks nothing on origin. `jj git push -r <revset>` skips untracked
+    // bookmarks ("Refusing to create new remote bookmark ... Nothing
+    // changed."), and the bookmark isn't jj-pr-named, so neither push path
+    // covered it.
+    await writeFile(join(repo, "feature.txt"), "feature\n");
+    await jj.describe("@", "feature");
+    await jj.bookmark_create("@", "test/jj/pre-created");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+    const proc = Bun.spawn(["sh", "-c", 'yes "" | "$BUN_EXE" "$JJ_PR_INDEX"'], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        BUN_EXE: bun,
+        FAKE_GH_STATE: statePath,
+        JJ_PR_INDEX: pathToIndexFile,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+
+    // Real GitHub rejects `pr create` with "Head ref must be a branch" when
+    // the branch never reached origin; fake gh doesn't model that, so assert
+    // on origin's refs directly.
+    const refFormat = "%(refname:short)";
+    const originRefs = await $`git --git-dir ${origin} for-each-ref --format=${refFormat}`
+      .quiet()
+      .text();
+    expect(originRefs.split("\n"), `${stdout}\n${stderr}`).toContain(
+      "test/jj/pre-created",
+    );
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(
+      ghState.prs.map((pr: { head: string; baseRefName: string }) => ({
+        head: pr.head,
+        base: pr.baseRefName,
+      })),
+    ).toEqual([{ head: "test/jj/pre-created", base: "main" }]);
+  }, 15000);
+
   test("uses the change description for a new PR's title and body", async () => {
     const { repo } = await setupTempJjRepo();
     const jj = new JJ(repo);
