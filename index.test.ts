@@ -12,7 +12,12 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { bookmarkHead, bookmarkHeadsForChange, bodyWithoutPrStack } from "./index";
+import {
+  bookmarkHead,
+  bookmarkHeadsForChange,
+  bodyWithoutPrStack,
+  unwrapHardWrappedText,
+} from "./index";
 import { closestBookmarkBeforeChangeRevset } from "./lib/pr-stack";
 import { constructRevset, DEFAULT_LOG_REVSET } from "./lib/revset";
 import { exec } from "./lib/exec";
@@ -295,6 +300,48 @@ describe("bodyWithoutPrStack", () => {
     const blanks =
       "description\n\n## PR Stack\n\n\n- https://github.com/x/y/pull/1\n- `main`\n";
     expect(bodyWithoutPrStack(blanks)).toBe("description\n\n");
+  });
+});
+
+describe("unwrapHardWrappedText", () => {
+  test("joins a hard-wrapped paragraph into a single line", () => {
+    const wrapped =
+      "Replaces the op-log rebase heuristic (--rebase flag and its checkpoint\n" +
+      "state) with GitHub ground truth: probe the stack's base commits against\n" +
+      "the commit->pulls API.";
+    expect(unwrapHardWrappedText(wrapped)).toBe(
+      "Replaces the op-log rebase heuristic (--rebase flag and its checkpoint state) with GitHub ground truth: probe the stack's base commits against the commit->pulls API.",
+    );
+  });
+
+  test("keeps blank lines as paragraph breaks", () => {
+    const wrapped = "first paragraph\nstill first\n\nsecond paragraph\nstill second";
+    expect(unwrapHardWrappedText(wrapped)).toBe(
+      "first paragraph still first\n\nsecond paragraph still second",
+    );
+  });
+
+  test("does not merge list items into one line", () => {
+    const wrapped =
+      "- release-pr.yml maintains a standing PR on every\n" +
+      "  merge to main.\n" +
+      "- release.yml publishes when a release PR\n" +
+      "  squash-merges.";
+    expect(unwrapHardWrappedText(wrapped)).toBe(
+      "- release-pr.yml maintains a standing PR on every merge to main.\n" +
+        "- release.yml publishes when a release PR squash-merges.",
+    );
+  });
+
+  test("leaves headings, blockquotes, and code fences as their own lines", () => {
+    const wrapped = "## Heading\ncontinuation\n\n> quoted\ntext\n\n```\ncode\n```";
+    expect(unwrapHardWrappedText(wrapped)).toBe(
+      "## Heading continuation\n\n> quoted text\n\n```\ncode\n```",
+    );
+  });
+
+  test("collapses more than one blank line between paragraphs", () => {
+    expect(unwrapHardWrappedText("one\n\n\n\ntwo")).toBe("one\n\ntwo");
   });
 });
 
@@ -851,7 +898,7 @@ describe("main", () => {
         title: "add feature flag",
         baseRefName: "main",
         body:
-          "Rolls out gradually.\nSee the runbook.\n\n" +
+          "Rolls out gradually. See the runbook.\n\n" +
           "## PR Stack\n- https://github.com/example/repo/pull/1\n- `main`\n",
       },
     ]);
