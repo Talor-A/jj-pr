@@ -30,6 +30,7 @@ import {
   type BookmarkResultWithHead,
   type StackEntry,
 } from "./lib/pr-stack";
+import { parsePushPreview, type PushMove } from "./lib/push-plan";
 import {
   JJLogItemJsonSchema,
   PrStateSchema,
@@ -202,14 +203,25 @@ function sanitizeBookmarkDescription(
   return slug || fallback;
 }
 
-// Gather half: read-only. Returns the human-readable push preview, or null
-// when jj reports nothing to push. Strips jj's dry-run disclaimer line.
-async function planPush(revset: string): Promise<string | null> {
+// A push plan: `raw` is jj's own preview text (still what gets rendered --
+// jj's wording is better than anything we'd reconstruct), `moves` is the
+// same content parsed into structured PushMove records for callers that
+// need to reason about individual ref updates (e.g. a future
+// `jj-pr.allow` config gating confirmation per move kind).
+interface PushPlan {
+  raw: string;
+  moves: PushMove[];
+}
+
+// Gather half: read-only. Returns the push plan, or null when jj reports
+// nothing to push. Strips jj's dry-run disclaimer line from `raw`.
+async function planPush(revset: string): Promise<PushPlan | null> {
   const output = await jj(`git push --dry-run -r '${revset}'`)
     .then(combineStdoutAndStderr)
     .then((s) => s.trim());
   if (output.endsWith("Nothing changed.")) return null;
-  return output.replace("\nDry-run requested, not pushing.", "");
+  const raw = output.replace("\nDry-run requested, not pushing.", "");
+  return { raw, moves: parsePushPreview(raw) };
 }
 
 async function ensureTrunk(): Promise<string> {
@@ -608,7 +620,7 @@ function rebaseCommandFor(source: MergedAncestorPr): string {
 // confirmed as a whole before anything mutates.
 interface ExecutionPlan {
   revset: string;
-  pushPreview: string | null; // from planPush
+  pushPreview: PushPlan | null; // from planPush
   rebases: MergedAncestorPr[]; // stranded stacks to rebase onto trunk first
   mergedTail: number[]; // merged ancestor PRs kept below the trunk line
   newBookmarks: BookmarkResultWithHead[]; // named but NOT yet pushed (new: true)
@@ -851,7 +863,7 @@ export async function main(spinner: Ora, args: CliArgs) {
     }
   }
   if (plan.pushPreview !== null) {
-    console.log(plan.pushPreview);
+    console.log(plan.pushPreview.raw);
     if (plan.rebases.length > 0) {
       console.log(
         "note: commit ids above are pre-rebase; the push targets the rebased commits",
