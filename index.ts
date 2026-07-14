@@ -536,6 +536,7 @@ function stackEntriesForPlans(
       {
         change,
         headBookmark: plan.headBookmark,
+        baseBranch: plan.baseBranch,
         prNumber: plan.existingPr?.number,
       },
     ];

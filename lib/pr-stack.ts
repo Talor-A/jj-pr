@@ -28,6 +28,7 @@ export type PlannedBookmark = Extract<ResolvedBookmark, { kind: "planned" }>;
 export interface StackEntry {
   change: string;
   headBookmark: string;
+  baseBranch: string;
   prNumber?: number; // absent until the PR exists
 }
 
