@@ -129,6 +129,94 @@ describe("renderStackMarkdown", () => {
     );
   });
 
+  test("renders sibling runs separated by ellipses", () => {
+    expect(
+      renderStackMarkdown(
+        [
+          {
+            change: "aaaa",
+            headBookmark: "ta/jj/a",
+            baseBranch: "main",
+            prNumber: 1,
+          },
+          {
+            change: "bbbb",
+            headBookmark: "ta/jj/b",
+            baseBranch: "ta/jj/a",
+            prNumber: 2,
+          },
+          {
+            change: "cccc",
+            headBookmark: "ta/jj/c",
+            baseBranch: "ta/jj/a",
+            prNumber: 3,
+          },
+        ],
+        "main",
+        "example/repo",
+      ),
+    ).toBe(
+      "## PR Stack\n" +
+        "- https://github.com/example/repo/pull/3\n" +
+        "- ...\n" +
+        "- https://github.com/example/repo/pull/2\n" +
+        "- ...\n" +
+        "- https://github.com/example/repo/pull/1\n" +
+        "- `main`\n",
+    );
+  });
+
+  test("renders deeper sibling runs before their shared ancestor", () => {
+    expect(
+      renderStackMarkdown(
+        [
+          {
+            change: "aaaa",
+            headBookmark: "ta/jj/a",
+            baseBranch: "main",
+            prNumber: 1,
+          },
+          {
+            change: "bbbb",
+            headBookmark: "ta/jj/b",
+            baseBranch: "ta/jj/a",
+            prNumber: 2,
+          },
+          {
+            change: "b2b2",
+            headBookmark: "ta/jj/b2",
+            baseBranch: "ta/jj/b",
+            prNumber: 4,
+          },
+          {
+            change: "cccc",
+            headBookmark: "ta/jj/c",
+            baseBranch: "ta/jj/a",
+            prNumber: 3,
+          },
+          {
+            change: "c2c2",
+            headBookmark: "ta/jj/c2",
+            baseBranch: "ta/jj/c",
+            prNumber: 5,
+          },
+        ],
+        "main",
+        "example/repo",
+      ),
+    ).toBe(
+      "## PR Stack\n" +
+        "- https://github.com/example/repo/pull/5\n" +
+        "- https://github.com/example/repo/pull/3\n" +
+        "- ...\n" +
+        "- https://github.com/example/repo/pull/4\n" +
+        "- https://github.com/example/repo/pull/2\n" +
+        "- ...\n" +
+        "- https://github.com/example/repo/pull/1\n" +
+        "- `main`\n",
+    );
+  });
+
   test("renders just the heading and trunk when there are no entries", () => {
     expect(renderStackMarkdown([], "main", "example/repo")).toBe(
       "## PR Stack\n- `main`\n",
@@ -214,6 +302,39 @@ describe("parsePrStackSection", () => {
     expect(parsePrStackSection(`body\n\n${rendered}`)).toEqual({
       above: [2],
       below: [1],
+    });
+  });
+
+  test("round-trips branchy sections with ellipsis separators", () => {
+    const rendered = renderStackMarkdown(
+      [
+        {
+          change: "aaaa",
+          headBookmark: "ta/jj/a",
+          baseBranch: "main",
+          prNumber: 1,
+        },
+        {
+          change: "bbbb",
+          headBookmark: "ta/jj/b",
+          baseBranch: "ta/jj/a",
+          prNumber: 2,
+        },
+        {
+          change: "cccc",
+          headBookmark: "ta/jj/c",
+          baseBranch: "ta/jj/a",
+          prNumber: 3,
+        },
+      ],
+      "main",
+      "example/repo",
+      [7],
+    );
+
+    expect(parsePrStackSection(`body\n\n${rendered}`)).toEqual({
+      above: [3, 2, 1],
+      below: [7],
     });
   });
 });
