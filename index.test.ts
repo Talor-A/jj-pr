@@ -1003,6 +1003,106 @@ describe("main", () => {
     ]);
   }, 15000);
 
+  test("renders branchy PR stacks as separate linear runs", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "a.txt"), "a\n");
+    await jj.describe("@", "a");
+    await jj.bookmark_create("@", "test/jj/a");
+    await jj.git_push_bookmark("test/jj/a");
+
+    await jj.new();
+    await writeFile(join(repo, "b.txt"), "b\n");
+    await jj.describe("@", "b");
+    await jj.bookmark_create("@", "test/jj/b");
+    await jj.git_push_bookmark("test/jj/b");
+
+    await jj.new("test/jj/a");
+    await writeFile(join(repo, "c.txt"), "c\n");
+    await jj.describe("@", "c");
+    await jj.bookmark_create("@", "test/jj/c");
+    await jj.git_push_bookmark("test/jj/c");
+
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 4,
+      prs: [
+        {
+          number: 1,
+          head: "test/jj/a",
+          title: "a",
+          baseRefName: "main",
+          body: "a body",
+        },
+        {
+          number: 2,
+          head: "test/jj/b",
+          title: "b",
+          baseRefName: "test/jj/a",
+          body: "b body",
+        },
+        {
+          number: 3,
+          head: "test/jj/c",
+          title: "c",
+          baseRefName: "test/jj/a",
+          body: "c body",
+        },
+      ],
+    });
+
+    const result =
+      await $`${bun} ${pathToIndexFile} -r ${"test/jj/b | test/jj/c"}`
+        .cwd(repo)
+        .env({
+          ...process.env,
+          FAKE_GH_STATE: statePath,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        })
+        .nothrow()
+        .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain("all PRs already up-to-date.");
+
+    const stackBody =
+      "## PR Stack\n" +
+      "- https://github.com/example/repo/pull/3\n" +
+      "- ...\n" +
+      "- https://github.com/example/repo/pull/2\n" +
+      "- ...\n" +
+      "- https://github.com/example/repo/pull/1\n" +
+      "- `main`\n";
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs).toEqual([
+      {
+        number: 1,
+        head: "test/jj/a",
+        title: "a",
+        baseRefName: "main",
+        body: `a body\n\n${stackBody}`,
+      },
+      {
+        number: 2,
+        head: "test/jj/b",
+        title: "b",
+        baseRefName: "test/jj/a",
+        body: `b body\n\n${stackBody}`,
+      },
+      {
+        number: 3,
+        head: "test/jj/c",
+        title: "c",
+        baseRefName: "test/jj/a",
+        body: `c body\n\n${stackBody}`,
+      },
+    ]);
+  }, 15000);
+
   test("creates a PR for a hand-named local bookmark without requiring the prefix", async () => {
     const { repo } = await setupTempJjRepo();
     const jj = new JJ(repo);
