@@ -78,8 +78,17 @@ describe("renderStackMarkdown", () => {
     expect(
       renderStackMarkdown(
         [
-          { change: "qlruyyvy", headBookmark: "ta/jj/bottom", prNumber: 1 },
-          { change: "mykpnrqw", headBookmark: "ta/jj/top" },
+          {
+            change: "qlruyyvy",
+            headBookmark: "ta/jj/bottom",
+            baseBranch: "main",
+            prNumber: 1,
+          },
+          {
+            change: "mykpnrqw",
+            headBookmark: "ta/jj/top",
+            baseBranch: "ta/jj/bottom",
+          },
         ],
         "main",
         "example/repo",
@@ -96,8 +105,18 @@ describe("renderStackMarkdown", () => {
     expect(
       renderStackMarkdown(
         [
-          { change: "qlruyyvy", headBookmark: "ta/jj/bottom", prNumber: 1 },
-          { change: "mykpnrqw", headBookmark: "ta/jj/top", prNumber: 2 },
+          {
+            change: "qlruyyvy",
+            headBookmark: "ta/jj/bottom",
+            baseBranch: "main",
+            prNumber: 1,
+          },
+          {
+            change: "mykpnrqw",
+            headBookmark: "ta/jj/top",
+            baseBranch: "ta/jj/bottom",
+            prNumber: 2,
+          },
         ],
         "main",
         "example/repo",
@@ -119,7 +138,14 @@ describe("renderStackMarkdown", () => {
   test("renders merged ancestors below the trunk line", () => {
     expect(
       renderStackMarkdown(
-        [{ change: "qlruyyvy", headBookmark: "ta/jj/top", prNumber: 2 }],
+        [
+          {
+            change: "qlruyyvy",
+            headBookmark: "ta/jj/top",
+            baseBranch: "main",
+            prNumber: 2,
+          },
+        ],
         "main",
         "example/repo",
         [1, 7],
@@ -173,7 +199,14 @@ describe("parsePrStackSection", () => {
 
   test("round-trips what renderStackMarkdown produces", () => {
     const rendered = renderStackMarkdown(
-      [{ change: "qlruyyvy", headBookmark: "ta/jj/top", prNumber: 2 }],
+      [
+        {
+          change: "qlruyyvy",
+          headBookmark: "ta/jj/top",
+          baseBranch: "main",
+          prNumber: 2,
+        },
+      ],
       "main",
       "example/repo",
       [1],
