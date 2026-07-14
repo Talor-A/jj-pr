@@ -1125,6 +1125,7 @@ describe("main", () => {
     const stackBody =
       "## PR Stack\n" +
       "- https://github.com/example/repo/pull/2\n" +
+      "- ...\n" +
       "- https://github.com/example/repo/pull/1\n" +
       "- `main`\n";
 
