@@ -80,18 +80,57 @@ export function renderStackMarkdown(
   mergedTail: number[] = [],
 ): string {
   const lines = ["## PR Stack"];
-  for (const entry of [...entries].reverse()) {
-    lines.push(
-      entry.prNumber !== undefined
-        ? `- https://github.com/${nameWithOwner}/pull/${entry.prNumber}`
-        : `- [new PR] ${entry.headBookmark}`,
-    );
+  let renderedRuns = 0;
+  for (const run of stackRuns(entries)) {
+    if (renderedRuns > 0) lines.push("- ...");
+    for (const entry of run) {
+      lines.push(formatStackEntry(entry, nameWithOwner));
+    }
+    renderedRuns += 1;
   }
   lines.push(`- \`${trunk}\``);
   for (const number of mergedTail) {
     lines.push(`- https://github.com/${nameWithOwner}/pull/${number}`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+function formatStackEntry(entry: StackEntry, nameWithOwner: string): string {
+  return entry.prNumber !== undefined
+    ? `- https://github.com/${nameWithOwner}/pull/${entry.prNumber}`
+    : `- [new PR] ${entry.headBookmark}`;
+}
+
+function stackRuns(entries: StackEntry[]): StackEntry[][] {
+  const entriesByHead = new Map(
+    entries.map((entry) => [entry.headBookmark, entry]),
+  );
+  const childrenByBase = new Map<string, StackEntry[]>();
+  for (const entry of entries) {
+    const children = childrenByBase.get(entry.baseBranch) ?? [];
+    children.push(entry);
+    childrenByBase.set(entry.baseBranch, children);
+  }
+
+  const rendered = new Set<string>();
+  const runs: StackEntry[][] = [];
+  for (const entry of [...entries].reverse()) {
+    if (rendered.has(entry.change)) continue;
+
+    const run: StackEntry[] = [];
+    let current: StackEntry | undefined = entry;
+    while (current && !rendered.has(current.change)) {
+      run.push(current);
+      rendered.add(current.change);
+
+      const parent = entriesByHead.get(current.baseBranch);
+      if (parent === undefined) break;
+      if ((childrenByBase.get(parent.headBookmark) ?? []).length !== 1) break;
+      current = parent;
+    }
+    runs.push(run);
+  }
+  return runs;
 }
 
 // Revset of base-branch candidates: real bookmarks plus changes whose
