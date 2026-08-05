@@ -14,6 +14,7 @@ Options:
       --dry-run         Preview changes without applying them
   -h, --help            Show this help message
   -v, --version         Show version number
+  -y, --yes             Automatically confirm all prompts
 
 Commands:
   completion <shell>    Print shell completion script (bash, zsh, or fish)
