@@ -65,7 +65,7 @@ async function getBookmarkPrefix(): Promise<string> {
     if (!user) {
       throw new Error(
         "Cannot determine a bookmark prefix: set `jj-pr.bookmark-prefix` " +
-          "or `user.email` in your jj config.",
+        "or `user.email` in your jj config.",
       );
     }
     prefix = `${user}/jj/`;
@@ -724,7 +724,7 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
       spinner.stop();
       console.error(
         `rebase produced conflicts in: ${conflicted.join(", ")}\n` +
-          "resolve them and re-run jj pr; nothing was pushed.",
+        "resolve them and re-run jj pr; nothing was pushed.",
       );
       process.exit(1);
     }
@@ -749,7 +749,7 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
       spinner.stop();
       console.error(
         `rebase succeeded but the push moved nothing:\n${pushOutput.trim()}\n` +
-          "the remote still has the pre-rebase commits; nothing else was updated.",
+        "the remote still has the pre-rebase commits; nothing else was updated.",
       );
       process.exit(1);
     }
@@ -1003,7 +1003,7 @@ export async function main(spinner: Ora, args: CliArgs) {
     plan.untrackedHeads.length === 0 &&
     plan.prPlans.every((prPlan) => prPlan.action === "noop");
   if (!onlyDescriptionUpkeep) {
-    const confirmed = await confirm("apply these changes? (⏎ / n)");
+    const confirmed = args.yes || await confirm("apply these changes? (⏎ / n)");
     if (!confirmed) {
       console.log("Aborted.");
       process.exit(1);

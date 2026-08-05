@@ -6,6 +6,7 @@ const CliSchema = z.object({
   dryRun: z.boolean().default(false),
   help: z.boolean().default(false),
   version: z.boolean().default(false),
+  yes: z.boolean().default(false),
 });
 
 export type CliArgs = z.infer<typeof CliSchema>;
@@ -24,6 +25,7 @@ Options:
       --dry-run         Preview changes without applying them
   -h, --help            Show this help message
   -v, --version         Show version number
+  -y, --yes             Automatically confirm all prompts
 
 Commands:
   completion <shell>    Print shell completion script (bash, zsh, or fish)
@@ -38,6 +40,7 @@ export function parseCli(argv: string[]) {
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
       revision: { type: "string", short: "r" },
+      yes: { type: "boolean", short: "y" },
     },
     allowPositionals: true,
   });
@@ -51,5 +54,6 @@ export function parseCli(argv: string[]) {
     dryRun: values["dry-run"],
     help: values.help,
     version: values.version,
+    yes: values.yes,
   });
 }
