@@ -40,6 +40,10 @@ import {
 } from "./lib/schema";
 import pkg from "./package.json";
 
+import {
+  canReadConfirmation,
+  NON_INTERACTIVE_MESSAGE,
+} from "./lib/interactive";
 import { jj, jjCommand, jjStdoutLines } from "./lib/jj";
 import { lines, unique } from "./lib/utils";
 
@@ -81,6 +85,10 @@ async function confirm(
   /** @default true */
   acceptEmpty: boolean = true,
 ): Promise<boolean> {
+  if (!canReadConfirmation()) {
+    console.error(NON_INTERACTIVE_MESSAGE);
+    process.exit(1);
+  }
   const rl = createInterface({ input: stdin, output: stdout });
   const reply = await rl.question(`${message} `);
   rl.close();
@@ -1003,7 +1011,9 @@ export async function main(spinner: Ora, args: CliArgs) {
     plan.untrackedHeads.length === 0 &&
     plan.prPlans.every((prPlan) => prPlan.action === "noop");
   if (!onlyDescriptionUpkeep) {
-    const confirmed = args.yes || await confirm("apply these changes? (⏎ / n)");
+    const confirmed = args.yes || await confirm(
+      "apply these changes? (⏎ / n)",
+    );
     if (!confirmed) {
       console.log("Aborted.");
       process.exit(1);

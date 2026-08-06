@@ -799,6 +799,42 @@ describe("main", () => {
     ]);
   }, 15000);
 
+  test("exits when stdin is not interactive and --yes is not set", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "feature.txt"), "feature\n");
+    await jj.describe("@", "feature");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh();
+    const proc = Bun.spawn([bun, pathToIndexFile], {
+      cwd: repo,
+      stdin: "ignore",
+      env: {
+        ...process.env,
+        BUN_EXE: bun,
+        FAKE_GH_STATE: statePath,
+        JJ_PR_INDEX: pathToIndexFile,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(1);
+    expect(stderr).toContain("Not running in an interactive terminal");
+    expect(stderr).toContain("--yes");
+    expect(stderr).toContain("--dry-run");
+  }, 15000);
+
   test("regression: approving a new bookmark also approves creating its PR", async () => {
     const { repo } = await setupTempJjRepo();
     const jj = new JJ(repo);
