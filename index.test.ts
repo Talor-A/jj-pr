@@ -845,6 +845,64 @@ describe("main", () => {
     ]);
   }, 15000);
 
+  test("creates a cross-fork PR with an owner-qualified head", async () => {
+    const { repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "feature.txt"), "feature\n");
+    await jj.describe("@", "feature");
+    await jj.new();
+
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 1,
+      prs: [],
+      baseRepo: "upstream/repo",
+      headRepo: "fork/repo",
+    });
+    const proc = Bun.spawn([bun, pathToIndexFile, "--yes"], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        BUN_EXE: bun,
+        FAKE_GH_STATE: statePath,
+        JJ_PR_INDEX: pathToIndexFile,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.prs[0]).toMatchObject({
+      head: "test/jj/feature",
+      headRepositoryOwner: { login: "fork" },
+      baseRefName: "main",
+    });
+    expect(ghState.commands).toContainEqual([
+      "pr",
+      "create",
+      "--repo",
+      "upstream/repo",
+      "--head",
+      "fork:test/jj/feature",
+      "--base",
+      "main",
+      "--draft",
+      "--title",
+      "feature",
+      "--body-file",
+      "-",
+    ]);
+  }, 15000);
+
   test("regression: pushes a pre-created untracked bookmark before creating its PR", async () => {
     const { origin, repo } = await setupTempJjRepo();
     const jj = new JJ(repo);
