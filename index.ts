@@ -121,6 +121,13 @@ async function localBookmarkHeadsForChange(change: string): Promise<string[]> {
   );
 }
 
+interface GitHubContext {
+  baseRepo: string;
+  headRepo: string;
+  headOwner: string;
+  pushRemote: string;
+}
+
 const prsByHead = new Map<string, PullRequest>();
 const prsByNumber = new Map<number, PullRequest>();
 
@@ -132,24 +139,35 @@ function cachePr(pr: PullRequest, head?: string): PullRequest {
   return pr;
 }
 
-async function prForHead(head: string): Promise<PullRequest | undefined> {
+async function prForHead(
+  head: string,
+  github: GitHubContext,
+): Promise<PullRequest | undefined> {
   if (prsByHead.has(head)) {
     return prsByHead.get(head);
   }
 
   const existingPrs = await execToSchema(
     PullRequestListSchema,
-    `gh pr list --head ${head} --json number,title,baseRefName,body`,
+    `gh pr list --repo ${shellQuote(github.baseRepo)} --head ${shellQuote(head)} --json number,title,baseRefName,body,headRepositoryOwner`,
+  );
+  const existingPr = existingPrs.find(
+    (pr) =>
+      github.headRepo === github.baseRepo ||
+      pr.headRepositoryOwner?.login === github.headOwner,
   );
 
-  if (existingPrs[0]) {
-    cachePr(existingPrs[0], head);
+  if (existingPr) {
+    cachePr(existingPr, head);
   }
 
-  return existingPrs[0];
+  return existingPr;
 }
 
-async function prForNumber(number: number): Promise<PullRequest> {
+async function prForNumber(
+  number: number,
+  github: GitHubContext,
+): Promise<PullRequest> {
   const cached = prsByNumber.get(number);
   if (cached) {
     return cached;
@@ -158,19 +176,22 @@ async function prForNumber(number: number): Promise<PullRequest> {
   return cachePr(
     await execToSchema(
       PullRequestSchema,
-      `gh pr view ${String(number)} --json number,title,baseRefName,body`,
+      `gh pr view ${String(number)} --repo ${shellQuote(github.baseRepo)} --json number,title,baseRefName,body,headRepositoryOwner`,
     ),
   );
 }
 
-async function preferredBookmarkHead(change: string): Promise<{
+async function preferredBookmarkHead(
+  change: string,
+  github: GitHubContext,
+): Promise<{
   head?: string;
   existingPr?: PullRequest;
 }> {
   const bookmarkHeads = await bookmarkHeadsForChange(change);
 
   for (const head of bookmarkHeads) {
-    const existingPr = await prForHead(head);
+    const existingPr = await prForHead(head, github);
     if (existingPr) {
       return { head, existingPr };
     }
@@ -214,8 +235,13 @@ interface PushPlan {
 
 // Gather half: read-only. Returns the push plan, or null when jj reports
 // nothing to push. Strips jj's dry-run disclaimer line from `raw`.
-async function planPush(revset: string): Promise<PushPlan | null> {
-  const output = await jj(`git push --dry-run -r '${revset}'`)
+async function planPush(
+  revset: string,
+  pushRemote: string,
+): Promise<PushPlan | null> {
+  const output = await jj(
+    `git push --remote ${shellQuote(pushRemote)} --dry-run -r ${shellQuote(revset)}`,
+  )
     .then(combineStdoutAndStderr)
     .then((s) => s.trim());
   if (output.endsWith("Nothing changed.")) return null;
@@ -234,6 +260,7 @@ async function planPush(revset: string): Promise<PushPlan | null> {
 async function untrackedLocalBookmarks(
   revset: string,
   names: string[],
+  pushRemote: string,
 ): Promise<string[]> {
   if (names.length === 0) return [];
   const entries = await jjStdoutLines(
@@ -245,11 +272,64 @@ async function untrackedLocalBookmarks(
     const [name, remote, flag] = entry.split("\t");
     if (!name || flag !== "true") continue;
     if (!remote) localPresent.add(name);
-    else if (remote !== "git") tracked.add(name);
+    else if (remote === pushRemote) tracked.add(name);
   }
   return names.filter(
     (name) => localPresent.has(name) && !tracked.has(name),
   );
+}
+
+async function githubContext(): Promise<GitHubContext> {
+  const remoteEntries = await jjStdoutLines("git remote list");
+  const remotes = new Map<string, string>();
+  for (const entry of remoteEntries) {
+    const separator = entry.indexOf(" ");
+    if (separator === -1) continue;
+    remotes.set(entry.slice(0, separator), entry.slice(separator + 1));
+  }
+
+  const configuredPushRemote = await jj("config get git.push")
+    .then(mapToStdout)
+    .then((value) => value.trim())
+    .catch(() => "");
+  const pushRemote = configuredPushRemote
+    ? configuredPushRemote
+    : remotes.has("origin")
+      ? "origin"
+      : remotes.size === 1
+        ? remotes.keys().next().value
+        : undefined;
+  if (!pushRemote || !remotes.has(pushRemote)) {
+    throw new Error(
+      "Unable to determine the Git push remote: set `git.push` in your jj config.",
+    );
+  }
+
+  const base = await execToSchema(
+    RepoSchema,
+    "gh repo view --json nameWithOwner",
+  );
+  const head = await execToSchema(
+    RepoSchema,
+    `gh repo view ${shellQuote(remotes.get(pushRemote)!)} --json nameWithOwner`,
+  );
+  const headOwner = head.nameWithOwner.split("/")[0];
+  if (!headOwner) {
+    throw new Error(`Unable to determine owner of ${head.nameWithOwner}`);
+  }
+
+  return {
+    baseRepo: base.nameWithOwner,
+    headRepo: head.nameWithOwner,
+    headOwner,
+    pushRemote,
+  };
+}
+
+function githubHead(github: GitHubContext, bookmark: string): string {
+  return github.headRepo === github.baseRepo
+    ? bookmark
+    : `${github.headOwner}:${bookmark}`;
 }
 
 async function ensureTrunk(): Promise<string> {
@@ -292,11 +372,12 @@ async function handleFix(spinner: Ora, revset: string, dryRun: boolean) {
 // failing `git push --named` halfway through the stack.
 async function resolveBookmarks(
   changes: string[],
+  github: GitHubContext,
 ): Promise<ResolvedBookmark[]> {
   const heads = await Promise.all(
     changes.map(async (change) => ({
       change,
-      ...(await preferredBookmarkHead(change)),
+      ...(await preferredBookmarkHead(change, github)),
     })),
   );
 
@@ -358,6 +439,7 @@ function uniqueBookmarkName(base: string, taken: Set<string>): string {
 async function preferredProposedBookmarkHead(
   change: string,
   bookmarksAndPRs: ResolvedBookmark[],
+  github: GitHubContext,
   // Revset fragment excluding merged-PR heads (and their ancestry) from base
   // candidacy: pre-rebase they still sit between trunk and the change, but
   // the plan must match the post-rebase graph, where they are gone.
@@ -391,7 +473,7 @@ async function preferredProposedBookmarkHead(
   );
 
   for (const head of bookmarkHeads) {
-    const existingPr = await prForHead(head);
+    const existingPr = await prForHead(head, github);
     if (existingPr) {
       return { head, existingPr };
     }
@@ -427,6 +509,7 @@ type PRPlan = PRPlanCreate | PRPlanUpdate | PRPlanNoop;
 async function createPrPlans(
   bookmarksAndPRs: ResolvedBookmark[],
   trunk: string,
+  github: GitHubContext,
   excludeMerged: string = "",
 ): Promise<PRPlan[]> {
   const plans = await Promise.all(
@@ -437,6 +520,7 @@ async function createPrPlans(
             await preferredProposedBookmarkHead(
               change,
               bookmarksAndPRs,
+              github,
               excludeMerged,
             )
           ).head ?? trunk;
@@ -604,7 +688,11 @@ export function unwrapHardWrappedText(text: string): string {
   return out.join("\n").replace(/\n{3,}/g, "\n\n");
 }
 
-async function alignPRs(spinner: Ora, plans: PRPlan[]) {
+async function alignPRs(
+  spinner: Ora,
+  plans: PRPlan[],
+  github: GitHubContext,
+) {
   const prsByChange = new Map<string, { number: number; body: string }>();
 
   for (const plan of plans) {
@@ -620,7 +708,9 @@ async function alignPRs(spinner: Ora, plans: PRPlan[]) {
 
     if (action === "update") {
       spinner.text = `updating base branch for ${headBookmark}...`;
-      await exec(`gh pr edit ${existingPr.number} --base ${baseBranch}`);
+      await exec(
+        `gh pr edit ${existingPr.number} --repo ${shellQuote(github.baseRepo)} --base ${shellQuote(baseBranch)}`,
+      );
 
       prsByChange.set(change, {
         number: existingPr.number,
@@ -634,19 +724,24 @@ async function alignPRs(spinner: Ora, plans: PRPlan[]) {
       spinner.text = `creating new PR for ${headBookmark}...`;
       const { title, body } = await prTitleAndBody(change, headBookmark);
       await execWithStdin(
-        `gh pr create --head ${headBookmark} --base ${baseBranch} --draft --title ${shellQuote(title)} --body-file -`,
+        `gh pr create --repo ${shellQuote(github.baseRepo)} --head ${shellQuote(githubHead(github, headBookmark))} --base ${shellQuote(baseBranch)} --draft --title ${shellQuote(title)} --body-file -`,
         body,
       );
 
       const createdPrs = await execToSchema(
         PullRequestListSchema,
-        `gh pr list --head ${headBookmark} --json number,title,baseRefName,body`,
+        `gh pr list --repo ${shellQuote(github.baseRepo)} --head ${shellQuote(headBookmark)} --json number,title,baseRefName,body,headRepositoryOwner`,
       );
-      if (!createdPrs[0]) {
+      const createdPr = createdPrs.find(
+        (pr) =>
+          github.headRepo === github.baseRepo ||
+          pr.headRepositoryOwner?.login === github.headOwner,
+      );
+      if (!createdPr) {
         throw new Error(`Unable to find PR created for ${headBookmark}`);
       }
 
-      const createdPr = cachePr(createdPrs[0], headBookmark);
+      cachePr(createdPr, headBookmark);
       prsByChange.set(change, {
         number: createdPr.number,
         body: createdPr.body ?? "",
@@ -665,6 +760,7 @@ async function mergedTailFor(
   detection: MergedAncestorDetection,
   liveStackNumbers: Set<number>,
   bodies: string[],
+  github: GitHubContext,
 ): Promise<number[]> {
   const parsed = bodies.flatMap((body) => parsePrStackSection(body) ?? []);
   const carried = parsed.flatMap((section) => section.below);
@@ -680,7 +776,7 @@ async function mergedTailFor(
   for (const number of displaced) {
     const state = await execToSchema(
       PrStateSchema,
-      `gh pr view ${String(number)} --json number,state`,
+      `gh pr view ${String(number)} --repo ${shellQuote(github.baseRepo)} --json number,state`,
     ).catch(() => undefined);
     if (state?.state === "MERGED") displacedMerged.push(number);
   }
@@ -705,6 +801,7 @@ interface ExecutionPlan {
   changes: string[]; // oldest-first change ids
   trunk: string;
   nameWithOwner: string;
+  github: GitHubContext;
 }
 
 async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
@@ -735,9 +832,9 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
   // revset re-resolves here, after the rebase, so it pushes the new commits.
   if (plan.pushPreview !== null || plan.rebases.length > 0) {
     spinner.text = "pushing...";
-    const pushOutput = await jj(`git push -r '${plan.revset}'`).then(
-      combineStdoutAndStderr,
-    );
+    const pushOutput = await jj(
+      `git push --remote ${shellQuote(plan.github.pushRemote)} -r ${shellQuote(plan.revset)}`,
+    ).then(combineStdoutAndStderr);
     // After a rebase the bookmarks always moved, so a "Nothing changed."
     // push means jj refused to push them (e.g. "Won't push bookmark ...:
     // commit has no author and/or committer set") -- jj reports that as a
@@ -758,15 +855,19 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
   await Promise.all([
     ...plan.newBookmarks.map(async ({ headBookmark, change }) => {
       spinner.text = `pushing ${headBookmark}...`;
-      await jj(`git push --named ${headBookmark}=${change}`);
+      await jj(
+        `git push --remote ${shellQuote(plan.github.pushRemote)} --named ${shellQuote(`${headBookmark}=${change}`)}`,
+      );
     }),
     ...plan.untrackedHeads.map(async (name) => {
       spinner.text = `pushing ${name}...`;
-      await jj(`git push --bookmark ${shellQuote(name)}`);
+      await jj(
+        `git push --remote ${shellQuote(plan.github.pushRemote)} --bookmark ${shellQuote(name)}`,
+      );
     }),
   ]);
 
-  const prInfo = await alignPRs(spinner, plan.prPlans);
+  const prInfo = await alignPRs(spinner, plan.prPlans, plan.github);
 
   const stackMarkdown = renderStackMarkdown(
     stackEntriesForPlans(plan.prPlans, plan.changes).map((entry) => ({
@@ -787,13 +888,16 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
         return;
       }
 
-      const current = await prForNumber(number);
+      const current = await prForNumber(number, plan.github);
       const currentBody = current.body ?? "";
       const newBody = `${bodyWithoutPrStack(currentBody)}${stackMarkdown}`;
 
       if (newBody === currentBody) return;
       spinner.text = `updating description for PR #${number}...`;
-      await execWithStdin(`gh pr edit ${number} --body-file -`, newBody);
+      await execWithStdin(
+        `gh pr edit ${number} --repo ${shellQuote(plan.github.baseRepo)} --body-file -`,
+        newBody,
+      );
       current.body = newBody;
       cachePr(current);
     }),
@@ -852,16 +956,13 @@ export async function main(spinner: Ora, args: CliArgs) {
     process.exit(0);
   }
 
-  const repo = await execToSchema(
-    RepoSchema,
-    `gh repo view --json nameWithOwner`,
-  );
+  const github = await githubContext();
 
   // Read-only: probes the stack's base commits against GitHub to find PRs
   // that merged underneath it (see lib/merged-prs.ts).
   spinner.start();
   spinner.text = "checking for merged ancestor PRs...";
-  const detection = await detectMergedAncestors(userRevset, repo.nameWithOwner);
+  const detection = await detectMergedAncestors(userRevset, github.baseRepo);
 
   // Plan everything as if the rebase already ran: merged heads and their
   // ancestry drop out of the working revset (their content landed in trunk),
@@ -880,7 +981,7 @@ export async function main(spinner: Ora, args: CliArgs) {
   // GitHub until the whole plan has been rendered and confirmed.
   spinner.start();
   spinner.text = "planning push...";
-  const pushPreview = await planPush(revset);
+  const pushPreview = await planPush(revset, github.pushRemote);
 
   spinner.text = "gathering changes...";
   const changes = await jjStdoutLines(
@@ -893,13 +994,18 @@ export async function main(spinner: Ora, args: CliArgs) {
     process.exit(0);
   }
 
-  const bookmarksAndPRs = await resolveBookmarks(changes);
+  const bookmarksAndPRs = await resolveBookmarks(changes, github);
   const newBookmarks = bookmarksAndPRs.filter(
     (bookmark) => bookmark.kind === "planned",
   );
 
   spinner.text = "planning pr changes...";
-  const prPlans = await createPrPlans(bookmarksAndPRs, trunk, excludeMerged);
+  const prPlans = await createPrPlans(
+    bookmarksAndPRs,
+    trunk,
+    github,
+    excludeMerged,
+  );
 
   // this should never happen.
   if (prPlans.length === 0) {
@@ -912,6 +1018,7 @@ export async function main(spinner: Ora, args: CliArgs) {
     unique(prPlans.map((prPlan) => prPlan.headBookmark)).filter(
       (name) => !newBookmarkNames.has(name),
     ),
+    github.pushRemote,
   );
 
   const existingPrBodies = prPlans.flatMap((prPlan) =>
@@ -925,6 +1032,7 @@ export async function main(spinner: Ora, args: CliArgs) {
       ),
     ),
     existingPrBodies,
+    github,
   );
 
   const plan: ExecutionPlan = {
@@ -937,7 +1045,8 @@ export async function main(spinner: Ora, args: CliArgs) {
     prPlans,
     changes,
     trunk,
-    nameWithOwner: repo.nameWithOwner,
+    nameWithOwner: github.baseRepo,
+    github,
   };
 
   // Render: one summary of everything the run would do.

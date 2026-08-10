@@ -10,6 +10,7 @@ interface FakePullRequest {
   state?: "open" | "closed";
   mergedAt?: string | null;
   headSha?: string;
+  headRepositoryOwner?: { login: string };
   mergeCommitSha?: string;
   commits?: string[]; // shas the PR's branch contained, for the api handler
 }
@@ -19,6 +20,8 @@ interface FakeGhState {
   prs: FakePullRequest[];
   commands?: string[][];
   failApi?: boolean; // make `gh api` calls fail, to test degraded detection
+  baseRepo?: string;
+  headRepo?: string;
 }
 
 function isOpen(pr: FakePullRequest): boolean {
@@ -45,6 +48,9 @@ function prJson(pr: FakePullRequest) {
     title: pr.title,
     baseRefName: pr.baseRefName,
     body: pr.body,
+    ...(pr.headRepositoryOwner
+      ? { headRepositoryOwner: pr.headRepositoryOwner }
+      : {}),
   };
 }
 
@@ -81,7 +87,14 @@ state.commands.push(args);
 await save();
 
 if (args[0] === "repo" && args[1] === "view") {
-  console.log(JSON.stringify({ nameWithOwner: "example/repo" }));
+  const explicitRepo = args[2] && !args[2].startsWith("-");
+  console.log(
+    JSON.stringify({
+      nameWithOwner: explicitRepo
+        ? (state.headRepo ?? state.baseRepo ?? "example/repo")
+        : (state.baseRepo ?? "example/repo"),
+    }),
+  );
   process.exit(0);
 }
 
@@ -128,12 +141,24 @@ if (args[0] === "api") {
 }
 
 if (args[0] === "pr" && args[1] === "create") {
-  const head = getOption(args, "--head");
+  const qualifiedHead = getOption(args, "--head");
+  const separator = qualifiedHead.indexOf(":");
+  const head =
+    separator === -1 ? qualifiedHead : qualifiedHead.slice(separator + 1);
+  const headOwner =
+    separator === -1 ? undefined : qualifiedHead.slice(0, separator);
   const baseRefName = getOption(args, "--base");
   const title = args.includes("--title") ? getOption(args, "--title") : head;
   const body = args.includes("--body-file") ? readFileSync(0, "utf8") : "";
   const number = state.nextNumber++;
-  state.prs.push({ number, head, title, baseRefName, body });
+  state.prs.push({
+    number,
+    head,
+    title,
+    baseRefName,
+    body,
+    ...(headOwner ? { headRepositoryOwner: { login: headOwner } } : {}),
+  });
   await save();
   console.log(`https://github.com/example/repo/pull/${number}`);
   process.exit(0);

@@ -22,6 +22,10 @@ export const PullRequestSchema = z.preprocess(
     title: z.string(),
     baseRefName: z.string(),
     body: z.string().nullable(),
+    headRepositoryOwner: z
+      .object({ login: z.string() })
+      .nullable()
+      .optional(),
   }),
 );
 export const PullRequestListSchema = z.preprocess(
