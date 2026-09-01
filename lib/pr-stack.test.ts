@@ -266,6 +266,18 @@ describe("parsePrStackSection", () => {
     });
   });
 
+  test("parses asterisk bullets and wrapped Markdown links", () => {
+    const body =
+      "## PR Stack\n\n" +
+      "* [https://github.com/x/y/pull/3](<https://github.com/x/y/pull/3>)\n" +
+      "* `main`\n" +
+      "* [https://github.com/x/y/pull/1](<https://github.com/x/y/pull/1>)\n";
+    expect(parsePrStackSection(body)).toEqual({
+      above: [3],
+      below: [1],
+    });
+  });
+
   test("ignores [new PR] placeholders and handles a missing tail", () => {
     const body =
       "## PR Stack\n- [new PR] ta/jj/top\n- https://github.com/x/y/pull/2\n- `main`\n";

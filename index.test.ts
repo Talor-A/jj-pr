@@ -290,6 +290,16 @@ describe("bodyWithoutPrStack", () => {
     expect(bodyWithoutPrStack(doubled)).toBe("description\n\n");
   });
 
+  test("strips legacy sections with asterisk bullets", () => {
+    const legacy =
+      "## PR Stack\n\n" +
+      "* [https://github.com/x/y/pull/1](<https://github.com/x/y/pull/1>)\n" +
+      "* `main`\n";
+    expect(bodyWithoutPrStack(`description\n\n${legacy}`)).toBe(
+      "description\n\n",
+    );
+  });
+
   test("strips stack when the heading has trailing whitespace", () => {
     const trailing =
       "description\n\n## PR Stack \n- https://github.com/x/y/pull/1\n- `main`\n";
