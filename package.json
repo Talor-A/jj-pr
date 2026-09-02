@@ -1,7 +1,7 @@
 {
   "name": "jj-pr",
   "module": "index.ts",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "author": {
     "name": "Talor Anderson",
     "email": "public-github@taloranderson.com"
