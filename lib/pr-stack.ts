@@ -38,7 +38,7 @@ export interface StackEntry {
 // extra blank lines after the heading. Bodies are normalized to LF before
 // this runs, since GitHub returns PR bodies with CRLF.
 export const PR_STACK_SECTION_PATTERN =
-  /(?:^|\n)(?:<!-- GENERATED_PR_STACK -->\n)?## PR Stack[ \t]*\n\n*(?:- .+(?:\n|$))+/gm;
+  /(?:^|\n)(?:<!-- GENERATED_PR_STACK -->\n)?## PR Stack[ \t]*\n\n*(?:[-*] .+(?:\n|$))+/gm;
 
 export interface ParsedPrStack {
   above: number[]; // PRs listed above the trunk line: the live stack
@@ -56,12 +56,14 @@ export function parsePrStackSection(body: string): ParsedPrStack | undefined {
 
   const numbersIn = (bullets: string[]) =>
     bullets.flatMap((line) => {
-      const url = line.match(/\/pull\/(\d+)\s*$/);
+      const url = line.match(
+        /https:\/\/github\.com\/[^/\s)>]+\/[^/\s)>]+\/pull\/(\d+)\b/,
+      );
       return url ? [Number(url[1])] : [];
     });
 
-  const bullets = section.split("\n").filter((line) => line.startsWith("- "));
-  const trunkIndex = bullets.findIndex((line) => /^- `[^`]+`$/.test(line));
+  const bullets = section.split("\n").filter((line) => /^[-*] /.test(line));
+  const trunkIndex = bullets.findIndex((line) => /^[-*] `[^`]+`$/.test(line));
   if (trunkIndex === -1) return { above: numbersIn(bullets), below: [] };
   return {
     above: numbersIn(bullets.slice(0, trunkIndex)),
