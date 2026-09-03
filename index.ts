@@ -82,10 +82,29 @@ async function confirm(
   acceptEmpty: boolean = true,
 ): Promise<boolean> {
   const rl = createInterface({ input: stdin, output: stdout });
-  const reply = await rl.question(`${message} `);
-  rl.close();
+  let reply: string;
+  try {
+    reply = await rl.question(`${message} `);
+  } catch (error) {
+    // Ctrl+C (or closing stdin) rejects the pending question with an
+    // AbortError. Treat it as a "no" so the caller prints "Aborted." instead
+    // of node dumping an uncaught-exception stack trace.
+    if (isAbortError(error)) return false;
+    throw error;
+  } finally {
+    rl.close();
+  }
   if (reply === "") return acceptEmpty;
   return /^[Yy]/.test(reply);
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (("code" in error && error.code === "ABORT_ERR") ||
+      ("name" in error && error.name === "AbortError"))
+  );
 }
 
 export function bodyWithoutPrStack(body: string): string {
