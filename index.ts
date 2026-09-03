@@ -502,11 +502,14 @@ function plansToString(plans: PRPlan[]): string {
   if (groupedPlans.update.length) {
     result += `update these PR base branches:\n`;
     result += groupedPlans.update
-      .map(
-        (plan) =>
-          `${plan.existingPr.number} ${plan.baseBranch} (from ${plan.existingPr?.baseRefName})`,
+      .map((plan) =>
+        [
+          `#${plan.existingPr.number} ${plan.headBookmark}`,
+          `from: ${plan.existingPr.baseRefName}`,
+          `to: ${plan.baseBranch}`,
+        ].join("\n"),
       )
-      .join("\n");
+      .join("\n\n");
     result += "\n";
   }
 
