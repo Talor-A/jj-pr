@@ -2026,7 +2026,9 @@ describe("merged ancestor PRs", () => {
     // The merged bookmark must not be treated as a change to PR ("create")
     // nor as a base rung; the child's base moves to trunk.
     expect(stdout).not.toContain("create these PRs");
-    expect(stdout).toContain("2 main (from test/jj/parent-work)");
+    expect(stdout).toContain(
+      "update these PR base branches:\n#2 test/jj/child-work\nfrom: test/jj/parent-work\nto: main\n",
+    );
     expect(stdout).toContain(`jj rebase -s '${parentSha}+ & mutable()'`);
 
     expect(await firstLine(repo, "test/jj/child-work-")).toBe(
