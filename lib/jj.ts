@@ -19,3 +19,11 @@ export function jj(args: string): Promise<{ stdout: string; stderr: string }> {
 export function jjStdoutLines(args: string): Promise<string[]> {
   return jj(args).then(mapToStdout).then(lines);
 }
+
+export function parseUnintegratedOperationId(
+  stderr: string,
+): string | undefined {
+  return stderr.match(
+    /^Operation left uncommitted because --no-integrate-operation was requested: ([0-9a-f]+)$/m,
+  )?.[1];
+}
