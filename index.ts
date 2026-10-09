@@ -14,6 +14,7 @@ import {
 } from "./lib/exec";
 import { help, parseCli, type CliArgs } from "./lib/args";
 import { completionScript, isShell, SHELLS } from "./lib/completion";
+import { CliError, reportError } from "./lib/errors";
 import {
   detectMergedAncestors,
   type MergedAncestorDetection,
@@ -1118,36 +1119,37 @@ export async function main(spinner: Ora, args: CliArgs) {
   await executePlan(spinner, plan);
 }
 
-if (import.meta.main) {
-  const rawArgs = process.argv.slice(2);
+export async function runCli(rawArgs: string[]): Promise<void> {
   if (rawArgs[0] === "completion") {
     const shell = rawArgs[1];
     if (!shell || !isShell(shell)) {
-      console.error(`Usage: jj-pr completion <${SHELLS.join("|")}>`);
-      process.exit(1);
+      throw new CliError(`Usage: jj-pr completion <${SHELLS.join("|")}>`);
     }
     console.log(completionScript(shell));
-    process.exit(0);
+    return;
   }
 
-  const spinner = ora("").start();
+  let args: CliArgs;
   try {
-    const args = parseCli(rawArgs);
+    args = parseCli(rawArgs);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CliError(message, 1, { cause: error });
+  }
 
-    if (args.version) {
-      spinner.stop();
-      console.log(pkg.version);
-      process.exit(0);
-    }
+  if (args.version) {
+    console.log(pkg.version);
+    return;
+  }
 
-    if (args.help) {
-      spinner.stop();
-      console.log(help());
-      process.exit(0);
-    }
+  if (args.help) {
+    console.log(help());
+    return;
+  }
 
+  const spinner = ora("");
+  try {
     if (args.dryRun) {
-      spinner.stop();
       console.log("dry run starting...");
       spinner.start();
     }
@@ -1155,5 +1157,13 @@ if (import.meta.main) {
     await main(spinner, args);
   } finally {
     spinner.stop();
+  }
+}
+
+if (import.meta.main) {
+  try {
+    await runCli(process.argv.slice(2));
+  } catch (error) {
+    process.exitCode = reportError(error);
   }
 }
