@@ -1,13 +1,66 @@
-import { exec as _exec, spawn } from "node:child_process";
+import {
+  exec as _exec,
+  type ExecOptionsWithStringEncoding,
+  spawn,
+} from "node:child_process";
 import { promisify } from "node:util";
 import z from "zod";
 
-export const exec = promisify(_exec);
+export interface CommandOutput {
+  stdout: string;
+  stderr: string;
+}
+
+export class CommandError extends Error {
+  readonly code: number;
+  readonly cmd: string;
+
+  constructor(
+    readonly command: string,
+    readonly exitCode: number,
+    readonly stdout: string,
+    readonly stderr: string,
+    options?: ErrorOptions,
+  ) {
+    super(`Command failed with exit code ${exitCode}: ${command}`, options);
+    this.name = "CommandError";
+    this.code = exitCode;
+    this.cmd = command;
+  }
+}
+
+const execAsync = promisify(_exec);
+
+type CommandOptions = Omit<ExecOptionsWithStringEncoding, "encoding"> & {
+  encoding?: BufferEncoding;
+};
+
+export async function exec(
+  command: string,
+  options?: CommandOptions,
+): Promise<CommandOutput> {
+  try {
+    return await execAsync(command, { encoding: "utf8", ...options });
+  } catch (error) {
+    const failure = error as {
+      code?: number;
+      stdout?: string | Buffer;
+      stderr?: string | Buffer;
+    };
+    throw new CommandError(
+      command,
+      typeof failure.code === "number" ? failure.code : 1,
+      String(failure.stdout ?? ""),
+      String(failure.stderr ?? ""),
+      { cause: error },
+    );
+  }
+}
 
 export function execWithStdin(
   command: string,
   stdin: string,
-): Promise<{ stdout: string; stderr: string }> {
+): Promise<CommandOutput> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, {
       shell: true,
@@ -22,21 +75,16 @@ export function execWithStdin(
     child.stderr.on("data", (chunk) => {
       stderr += String(chunk);
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      reject(new CommandError(command, 1, stdout, stderr, { cause: error }));
+    });
     child.on("close", (code) => {
       if (code === 0) {
         resolve({ stdout, stderr });
         return;
       }
 
-      reject(
-        Object.assign(new Error(`Command failed: ${command}`), {
-          code,
-          stdout,
-          stderr,
-          cmd: command,
-        }),
-      );
+      reject(new CommandError(command, code ?? 1, stdout, stderr));
     });
 
     child.stdin.write(stdin);
