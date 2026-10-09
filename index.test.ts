@@ -2087,10 +2087,15 @@ describe("merged ancestor PRs", () => {
     expect(await readFile(join(repo, "trunk-after-merge.txt"), "utf8")).toBe(
       "trunk advanced\n",
     );
-    // ...and the exact rebased commit was previewed and pushed.
+    // ...and the exact rebased commit was pushed without exposing either
+    // commit ID in the human-facing plan.
     const rebasedSha = await commitSha(repo, "test/jj/child-work");
     expect(rebasedSha, `${stdout}\n${stderr}`).not.toBe(childSha);
-    expect(stdout).toContain(rebasedSha.slice(0, 12));
+    expect(stdout).toContain(
+      "push these branches:\n#2 child work: move sideways",
+    );
+    expect(stdout).not.toContain(childSha.slice(0, 12));
+    expect(stdout).not.toContain(rebasedSha.slice(0, 12));
     expect(stdout).not.toContain("commit ids above are pre-rebase");
     expect(
       await remoteBranchSha(origin, "test/jj/child-work"),

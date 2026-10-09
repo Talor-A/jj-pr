@@ -209,11 +209,9 @@ function sanitizeBookmarkDescription(
   return slug || fallback;
 }
 
-// A push plan: `raw` is jj's own preview text (still what gets rendered --
-// jj's wording is better than anything we'd reconstruct), `moves` is the
-// same content parsed into structured PushMove records for callers that
-// need to reason about individual ref updates (e.g. a future
-// `jj-pr.allow` config gating confirmation per move kind).
+// A push plan keeps jj's original preview as a fallback for output from a
+// future jj version that we cannot yet summarize. Recognized bookmark moves
+// are rendered from the structured records below instead.
 interface PushPlan {
   raw: string;
   moves: PushMove[];
@@ -590,6 +588,33 @@ function rebasePlansToString(
       return `${prPlanLabel(plan)} -> ${base ? prPlanLabel(base) : plan.baseBranch}`;
     })
     .join("\n")}\n`;
+}
+
+function pushPlansToString(push: PushPlan, plans: PRPlan[]): string {
+  if (push.moves.length === 0) return push.raw;
+
+  const plansByHead = new Map(plans.map((plan) => [plan.headBookmark, plan]));
+  const lines = push.moves.map((move) => {
+    const plan = plansByHead.get(move.bookmark);
+    const label = plan ? prPlanLabel(plan) : move.bookmark;
+
+    switch (move.kind) {
+      case "new":
+        return `${label}: create`;
+      case "forward":
+        return `${label}: move forward`;
+      case "sideways":
+        return `${label}: move sideways`;
+      case "backward":
+        return `${label}: move backward`;
+      case "delete":
+        return `${label}: delete`;
+      case "unknown":
+        return move.raw.trim();
+    }
+  });
+
+  return `push these branches:\n${lines.join("\n")}`;
 }
 
 // Stack entries in `changes` order (oldest first). Plans for changes with an
@@ -1103,7 +1128,7 @@ export async function main(spinner: Ora, args: CliArgs) {
   );
   if (rebaseSummary) console.log(rebaseSummary);
   if (plan.pushPreview !== null) {
-    console.log(plan.pushPreview.raw);
+    console.log(pushPlansToString(plan.pushPreview, plan.prPlans));
   }
   if (plan.newBookmarks.length > 0) {
     console.log(
