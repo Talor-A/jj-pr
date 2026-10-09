@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CliError, reportError } from "./errors";
+import { CliError, errorMessage, reportError } from "./errors";
 import { CommandError } from "./exec";
 
 function capture(error: unknown): { output: string; exitCode: number } {
@@ -47,5 +47,18 @@ describe("reportError", () => {
     expect(result.exitCode).toBe(1);
     expect(result.output).toStartWith("Error: unexpected\n");
     expect(result.output).toContain("at ");
+  });
+});
+
+describe("errorMessage", () => {
+  test("uses subprocess output in a larger user-facing error", () => {
+    const failure = new CommandError(
+      "gh pr edit 123",
+      1,
+      "",
+      "GraphQL: Resource not accessible\n",
+    );
+
+    expect(errorMessage(failure)).toBe("GraphQL: Resource not accessible");
   });
 });

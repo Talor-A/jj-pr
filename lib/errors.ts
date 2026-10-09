@@ -17,6 +17,13 @@ function withTrailingNewline(output: string): string {
   return output.endsWith("\n") ? output : `${output}\n`;
 }
 
+export function errorMessage(error: unknown): string {
+  if (error instanceof CommandError) {
+    return (error.stderr || error.stdout || error.message).trimEnd();
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function reportError(
   error: unknown,
   write: ErrorWriter = (output) => process.stderr.write(output),

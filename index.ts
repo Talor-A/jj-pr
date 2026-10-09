@@ -14,7 +14,7 @@ import {
 } from "./lib/exec";
 import { help, parseCli, type CliArgs } from "./lib/args";
 import { completionScript, isShell, SHELLS } from "./lib/completion";
-import { CliError, reportError } from "./lib/errors";
+import { CliError, errorMessage, reportError } from "./lib/errors";
 import {
   detectMergedAncestors,
   type MergedAncestorDetection,
@@ -804,12 +804,10 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
       `log --no-graph -r ${shellQuote(`(${plan.revset}) & conflicts()`)} -T 'change_id.short() ++ "\n"'`,
     );
     if (conflicted.length > 0) {
-      spinner.stop();
-      console.error(
+      throw new CliError(
         `rebase produced conflicts in: ${conflicted.join(", ")}\n` +
-        "resolve them and re-run jj pr; nothing was pushed.",
+          "resolve them and re-run jj pr; nothing was pushed.",
       );
-      process.exit(1);
     }
   }
 
@@ -829,12 +827,10 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
       plan.rebases.length > 0 &&
       pushOutput.trim().endsWith("Nothing changed.")
     ) {
-      spinner.stop();
-      console.error(
+      throw new CliError(
         `rebase succeeded but the push moved nothing:\n${pushOutput.trim()}\n` +
-        "the remote still has the pre-rebase commits; nothing else was updated.",
+          "the remote still has the pre-rebase commits; nothing else was updated.",
       );
-      process.exit(1);
     }
   }
 
@@ -884,20 +880,20 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
 
   spinner.stop();
 
-  results.forEach((result, index) => {
-    if (result.status !== "rejected") return;
+  const failures = results.flatMap((result, index) => {
+    if (result.status !== "rejected") return [];
     const change = plan.changes[index];
     const number =
       change === undefined ? undefined : prInfo.get(change)?.number;
-    const message =
-      result.reason instanceof Error
-        ? result.reason.message
-        : String(result.reason);
-    console.error(`failed to update description for PR #${number}: ${message}`);
-    process.exitCode = 1;
+    return [
+      `failed to update description for PR #${number}: ${errorMessage(result.reason)}`,
+    ];
   });
 
   console.log(stackMarkdown);
+  if (failures.length > 0) {
+    throw new CliError(failures.join("\n"));
+  }
 }
 
 async function doFetch(spinner: Ora) {
@@ -923,7 +919,7 @@ async function constructRevsetForRevision(revision: string): Promise<string> {
   return revisions.map(constructRevset).join(" | ");
 }
 
-export async function main(spinner: Ora, args: CliArgs) {
+export async function main(spinner: Ora, args: CliArgs): Promise<number> {
   const trunk = await ensureTrunk();
 
   await doFetch(spinner);
@@ -932,7 +928,7 @@ export async function main(spinner: Ora, args: CliArgs) {
   if (!userRevset) {
     spinner.text = "nothing to do.";
     spinner.stopAndPersist();
-    process.exit(0);
+    return 0;
   }
 
   const repo = await execToSchema(
@@ -980,7 +976,7 @@ export async function main(spinner: Ora, args: CliArgs) {
   if (!changes.length) {
     spinner.text = "nothing to do.";
     spinner.stopAndPersist();
-    process.exit(0);
+    return 0;
   }
 
   const bookmarksAndPRs = await resolveBookmarks(changes);
@@ -1096,7 +1092,7 @@ export async function main(spinner: Ora, args: CliArgs) {
         );
       }
     }
-    return;
+    return 0;
   }
 
   // Confirm: one prompt covering the rebases, pushes, PR creations, and
@@ -1112,21 +1108,22 @@ export async function main(spinner: Ora, args: CliArgs) {
     const confirmed = args.yes || await confirm("apply these changes? (⏎ / n)");
     if (!confirmed) {
       console.log("Aborted.");
-      process.exit(1);
+      return 1;
     }
   }
 
   await executePlan(spinner, plan);
+  return 0;
 }
 
-export async function runCli(rawArgs: string[]): Promise<void> {
+export async function runCli(rawArgs: string[]): Promise<number> {
   if (rawArgs[0] === "completion") {
     const shell = rawArgs[1];
     if (!shell || !isShell(shell)) {
       throw new CliError(`Usage: jj-pr completion <${SHELLS.join("|")}>`);
     }
     console.log(completionScript(shell));
-    return;
+    return 0;
   }
 
   let args: CliArgs;
@@ -1139,12 +1136,12 @@ export async function runCli(rawArgs: string[]): Promise<void> {
 
   if (args.version) {
     console.log(pkg.version);
-    return;
+    return 0;
   }
 
   if (args.help) {
     console.log(help());
-    return;
+    return 0;
   }
 
   const spinner = ora("");
@@ -1154,7 +1151,7 @@ export async function runCli(rawArgs: string[]): Promise<void> {
       spinner.start();
     }
 
-    await main(spinner, args);
+    return await main(spinner, args);
   } finally {
     spinner.stop();
   }
@@ -1162,7 +1159,7 @@ export async function runCli(rawArgs: string[]): Promise<void> {
 
 if (import.meta.main) {
   try {
-    await runCli(process.argv.slice(2));
+    process.exitCode = await runCli(process.argv.slice(2));
   } catch (error) {
     process.exitCode = reportError(error);
   }
