@@ -79,8 +79,7 @@ export async function detectMergedAncestors(
     }
 
     // A single commit can be the head of multiple PR branches. If any PR with
-    // this exact head is still open, the commit remains a live stack layer;
-    // another PR for the same SHA being marked merged does not strand it.
+    // this exact head is still open, keep it in the stack.
     const openHeads = new Set(
       pulls.filter((pull) => pull.state === "open").map((pull) => pull.head.sha),
     );
