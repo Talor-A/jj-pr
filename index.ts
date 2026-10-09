@@ -572,6 +572,14 @@ function prPlanLabel(plan: PRPlan): string {
     : plan.headBookmark;
 }
 
+function mergedPrsToString(merged: MergedAncestorPr[]): string {
+  if (merged.length === 0) return "";
+
+  return `these PRs have merged:\n${merged
+    .map((pr) => `#${pr.prNumber} ${pr.title}`)
+    .join("\n")}\n`;
+}
+
 function rebasePlansToString(
   plans: PRPlan[],
   rebasedChanges: string[],
@@ -854,6 +862,7 @@ async function stageRebases(
 interface ExecutionPlan {
   revset: string;
   pushPreview: PushPlan | null; // from planPush
+  mergedPrs: MergedAncestorPr[]; // merged ancestors removed from the live stack
   rebases: MergedAncestorPr[]; // stranded stacks to rebase onto trunk first
   rebaseOperation?: string; // exact staged result to integrate after confirmation
   rebasedChanges: string[]; // changes rewritten by the staged operation
@@ -1107,6 +1116,7 @@ export async function main(spinner: Ora, args: CliArgs) {
   const plan: ExecutionPlan = {
     revset,
     pushPreview,
+    mergedPrs: detection.merged,
     rebases: detection.rebaseSources,
     rebaseOperation,
     rebasedChanges,
@@ -1122,6 +1132,8 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   // Render: one summary of everything the run would do.
   spinner.stop();
+  const mergedSummary = mergedPrsToString(plan.mergedPrs);
+  if (mergedSummary) console.log(mergedSummary);
   const rebaseSummary = rebasePlansToString(
     plan.prPlans,
     plan.rebasedChanges,

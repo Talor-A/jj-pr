@@ -2076,7 +2076,10 @@ describe("merged ancestor PRs", () => {
     );
 
     expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
-    expect(stdout).toContain("rebase these PRs:\n#2 child work -> main");
+    expect(stdout).toContain(
+      "these PRs have merged:\n#1 parent work\n\n" +
+        "rebase these PRs:\n#2 child work -> main",
+    );
     expect(stdout).not.toContain(parentSha);
 
     // The child now sits on the latest trunk commit...
@@ -2148,6 +2151,7 @@ describe("merged ancestor PRs", () => {
     // The merged bookmark must not be treated as a change to PR ("create")
     // nor as a base rung; the child's base moves to trunk.
     expect(stdout).not.toContain("create these PRs");
+    expect(stdout).toContain("these PRs have merged:\n#1 parent work");
     expect(stdout).toContain("2 main (from test/jj/parent-work)");
     expect(stdout).toContain("rebase these PRs:\n#2 child work -> main");
 
@@ -2208,6 +2212,7 @@ describe("merged ancestor PRs", () => {
     );
 
     expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).not.toContain("these PRs have merged");
     expect(stdout).not.toContain("rebase these PRs");
     expect(await commitSha(repo, "test/jj/parent-work")).toBe(parentSha);
     expect(await commitSha(repo, "test/jj/child-work")).toBe(childSha);
@@ -2335,9 +2340,12 @@ describe("merged ancestor PRs", () => {
     );
 
     expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).toContain(
+      "these PRs have merged:\n#2 middle work\n#1 parent work\n\n" +
+        "rebase these PRs:\n#3 child work -> main",
+    );
     // One rebase, from the tipmost merged head; the deeper merged PR's
     // commits stay behind (their content is in trunk).
-    expect(stdout).toContain("rebase these PRs:\n#3 child work -> main");
     expect(stdout).not.toContain(parentSha);
     expect(stdout).not.toContain(middleSha!);
 

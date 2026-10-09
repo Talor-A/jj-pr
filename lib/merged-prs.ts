@@ -4,6 +4,7 @@ import { CommitPullsSchema } from "./schema";
 
 export interface MergedAncestorPr {
   prNumber: number;
+  title: string;
   headRefOid: string;
   headRefName: string;
   mergedAt: string;
@@ -105,6 +106,7 @@ export async function detectMergedAncestors(
       if (!present.has(pull.head.sha)) continue;
       merged.set(pull.number, {
         prNumber: pull.number,
+        title: pull.title,
         headRefOid: pull.head.sha,
         headRefName: pull.head.ref,
         mergedAt: pull.merged_at!,

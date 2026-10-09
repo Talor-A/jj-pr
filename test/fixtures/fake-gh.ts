@@ -130,6 +130,7 @@ if (args[0] === "api") {
       JSON.stringify(
         matches.map((pr) => ({
           number: pr.number,
+          title: pr.title,
           state: isOpen(pr) ? "open" : "closed",
           merged_at: pr.mergedAt ?? null,
           merge_commit_sha: pr.mergeCommitSha ?? null,

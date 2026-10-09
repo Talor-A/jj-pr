@@ -53,6 +53,7 @@ export const CommitPullsSchema = z.preprocess(
   z.array(
     z.object({
       number: z.number(),
+      title: z.string(),
       state: z.string(),
       merged_at: z.string().nullable(),
       merge_commit_sha: z.string().nullable(),
