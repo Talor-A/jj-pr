@@ -1844,6 +1844,7 @@ async function remoteBranchSha(
 async function setupSquashMergedParent(options: {
   deleteBranch: boolean;
   middlePr?: boolean; // also stack + squash-merge a middle PR (#2)
+  advanceTrunk?: boolean; // make the rebased working-copy tree differ
 }): Promise<{
   origin: string;
   repo: string;
@@ -1891,6 +1892,11 @@ async function setupSquashMergedParent(options: {
     await git("merge", "--squash", "origin/test/jj/middle-work");
     await git("commit", "-m", "middle work (#2)");
   }
+  if (options.advanceTrunk) {
+    await writeFile(join(clone, "trunk-after-merge.txt"), "trunk advanced\n");
+    await git("add", "trunk-after-merge.txt");
+    await git("commit", "-m", "trunk advanced");
+  }
   await git("push", "origin", "main");
   if (options.deleteBranch) {
     await git("push", "origin", ":test/jj/parent-work");
@@ -1931,7 +1937,10 @@ describe("merged ancestor PRs", () => {
 
   test("rebases a stack stranded by a squash-merged parent (branch deleted)", async () => {
     const { origin, repo, parentSha, childSha } =
-      await setupSquashMergedParent({ deleteBranch: true });
+      await setupSquashMergedParent({
+        deleteBranch: true,
+        advanceTrunk: true,
+      });
 
     const stackBefore = `## PR Stack\n- ${pull(2)}\n- ${pull(1)}\n- \`main\`\n`;
     const { binDir, statePath } = await setupFakeGh({
@@ -1967,14 +1976,19 @@ describe("merged ancestor PRs", () => {
       `PR #1 (test/jj/parent-work) merged: $ jj rebase -s '${parentSha}+ & mutable()' -d 'trunk()'`,
     );
 
-    // The child now sits directly on the squash commit...
+    // The child now sits on the latest trunk commit...
     expect(await firstLine(repo, "test/jj/child-work-")).toBe(
-      "parent work (#1)",
+      "trunk advanced",
     );
-    // ...and its new commit was pushed even though the pre-rebase preview
-    // saw nothing to push.
+    // ...and integrating the speculative operation updated the checkout.
+    expect(await readFile(join(repo, "trunk-after-merge.txt"), "utf8")).toBe(
+      "trunk advanced\n",
+    );
+    // ...and the exact rebased commit was previewed and pushed.
     const rebasedSha = await commitSha(repo, "test/jj/child-work");
     expect(rebasedSha, `${stdout}\n${stderr}`).not.toBe(childSha);
+    expect(stdout).toContain(rebasedSha.slice(0, 12));
+    expect(stdout).not.toContain("commit ids above are pre-rebase");
     expect(
       await remoteBranchSha(origin, "test/jj/child-work"),
       `${stdout}\n${stderr}`,
@@ -2115,6 +2129,12 @@ describe("merged ancestor PRs", () => {
     expect(again.stdout.toString()).toContain(
       `jj rebase -s '${parentSha}+ & mutable()' -d 'trunk()'`,
     );
+
+    // The speculative rebases are not part of the visible operation log.
+    const operationLog = await new JJ(repo).exec(
+      `op log --no-graph -T 'self.description() ++ "\\n"'`,
+    );
+    expect(operationLog.stdout).not.toContain("rebase commit");
   }, 30000);
 
   test("two stacked PRs merged at once: rebases from the tipmost merged head", async () => {

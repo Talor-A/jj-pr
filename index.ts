@@ -40,7 +40,12 @@ import {
 } from "./lib/schema";
 import pkg from "./package.json";
 
-import { jj, jjCommand, jjStdoutLines } from "./lib/jj";
+import {
+  jj,
+  jjCommand,
+  jjStdoutLines,
+  parseUnintegratedOperationId,
+} from "./lib/jj";
 import { lines, unique } from "./lib/utils";
 
 let _bookmarkPrefix: string | undefined;
@@ -213,9 +218,18 @@ interface PushPlan {
 }
 
 // Gather half: read-only. Returns the push plan, or null when jj reports
-// nothing to push. Strips jj's dry-run disclaimer line from `raw`.
-async function planPush(revset: string): Promise<PushPlan | null> {
-  const output = await jj(`git push --dry-run -r '${revset}'`)
+// nothing to push. When an operation is provided, previews the exact staged
+// repository state. Strips jj's dry-run disclaimer line from `raw`.
+async function planPush(
+  revset: string,
+  operation?: string,
+): Promise<PushPlan | null> {
+  const atOperation = operation
+    ? `--at-op ${shellQuote(operation)} `
+    : "";
+  const output = await jj(
+    `${atOperation}git push --dry-run -r ${shellQuote(revset)}`,
+  )
     .then(combineStdoutAndStderr)
     .then((s) => s.trim());
   if (output.endsWith("Nothing changed.")) return null;
@@ -692,12 +706,45 @@ function rebaseCommandFor(source: MergedAncestorPr): string {
   return `jj rebase -s '${source.headRefOid}+ & mutable()' -d 'trunk()'`;
 }
 
-// Everything a run would do, gathered read-only so it can be rendered and
-// confirmed as a whole before anything mutates.
+// Builds the rebased repository state without making it visible. Each rebase
+// starts from the operation produced by the previous one, preserving the
+// sequential behavior executePlan used to have for multiple stranded stacks.
+async function stageRebases(
+  rebases: MergedAncestorPr[],
+): Promise<string | undefined> {
+  let operation: string | undefined;
+
+  for (const source of rebases) {
+    const atOperation = operation
+      ? `--at-op ${shellQuote(operation)} `
+      : "";
+    const sourceRevset = `${source.headRefOid}+ & mutable()`;
+    const result = await jj(
+      `${atOperation}rebase -s ${shellQuote(sourceRevset)} ` +
+        "-d 'trunk()' --no-integrate-operation",
+    );
+    const nextOperation = parseUnintegratedOperationId(result.stderr);
+    if (nextOperation !== undefined) {
+      operation = nextOperation;
+      continue;
+    }
+    if (!result.stderr.includes("No revisions to rebase.")) {
+      throw new Error(
+        `jj rebase did not report its unintegrated operation id:\n${result.stderr.trim()}`,
+      );
+    }
+  }
+
+  return operation;
+}
+
+// Everything a run would make visible locally or change remotely, gathered so
+// it can be rendered and confirmed as a whole.
 interface ExecutionPlan {
   revset: string;
   pushPreview: PushPlan | null; // from planPush
   rebases: MergedAncestorPr[]; // stranded stacks to rebase onto trunk first
+  rebaseOperation?: string; // exact staged result to integrate after confirmation
   mergedTail: number[]; // merged ancestor PRs kept below the trunk line
   newBookmarks: PlannedBookmark[]; // named but NOT yet pushed
   untrackedHeads: string[]; // pre-existing local head bookmarks tracking no remote
@@ -710,11 +757,11 @@ interface ExecutionPlan {
 async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
   spinner.start();
 
-  for (const source of plan.rebases) {
-    spinner.text = `rebasing changes stranded above merged PR #${source.prNumber}...`;
-    await jj(
-      `rebase -s ${shellQuote(`${source.headRefOid}+ & mutable()`)} -d 'trunk()'`,
-    );
+  if (plan.rebaseOperation !== undefined) {
+    spinner.text = "applying rebased changes...";
+    await jj(`op integrate ${shellQuote(plan.rebaseOperation)}`);
+    // Integrating exposes the new @ but does not update its workspace checkout.
+    await jj("workspace update-stale");
   }
   if (plan.rebases.length > 0) {
     const conflicted = await jjStdoutLines(
@@ -730,9 +777,9 @@ async function executePlan(spinner: Ora, plan: ExecutionPlan): Promise<void> {
     }
   }
 
-  // A rebase moves bookmarks sideways even when the pre-rebase preview saw
-  // nothing to push, so the push cannot be skipped on preview alone. The
-  // revset re-resolves here, after the rebase, so it pushes the new commits.
+  // Keep the rebase fallback until planPush distinguishes a harmless refusal
+  // to create an untracked remote bookmark from a rewritten commit that jj
+  // refuses to push. Both currently end in "Nothing changed." and map to null.
   if (plan.pushPreview !== null || plan.rebases.length > 0) {
     spinner.text = "pushing...";
     const pushOutput = await jj(`git push -r '${plan.revset}'`).then(
@@ -865,8 +912,8 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   // Plan everything as if the rebase already ran: merged heads and their
   // ancestry drop out of the working revset (their content landed in trunk),
-  // so bookmark and base planning match the post-rebase graph. The actual
-  // `jj rebase` only runs in executePlan, after the confirm prompt.
+  // so bookmark and base planning match the post-rebase graph. The exact
+  // rebase is staged below and only integrated after the confirm prompt.
   const excludeMerged =
     detection.rebaseSources.length > 0
       ? ` & ~::(${detection.rebaseSources.map((m) => m.headRefOid).join(" | ")})`
@@ -876,11 +923,18 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   await handleFix(spinner, revset, args.dryRun);
 
+  // Compute the exact rebase now, but leave it outside the visible operation
+  // log until the user confirms the complete plan. Planning still uses the
+  // current graph for now; the push preview opts into the staged operation.
+  spinner.start();
+  spinner.text = "planning rebases...";
+  const rebaseOperation = await stageRebases(detection.rebaseSources);
+
   // Gather: read-only. Nothing below may touch the repo, the remote, or
   // GitHub until the whole plan has been rendered and confirmed.
   spinner.start();
   spinner.text = "planning push...";
-  const pushPreview = await planPush(revset);
+  const pushPreview = await planPush(revset, rebaseOperation);
 
   spinner.text = "gathering changes...";
   const changes = await jjStdoutLines(
@@ -931,6 +985,7 @@ export async function main(spinner: Ora, args: CliArgs) {
     revset,
     pushPreview,
     rebases: detection.rebaseSources,
+    rebaseOperation,
     mergedTail,
     newBookmarks,
     untrackedHeads,
@@ -952,13 +1007,6 @@ export async function main(spinner: Ora, args: CliArgs) {
   }
   if (plan.pushPreview !== null) {
     console.log(plan.pushPreview.raw);
-    if (plan.rebases.length > 0) {
-      console.log(
-        "note: commit ids above are pre-rebase; the push targets the rebased commits",
-      );
-    }
-  } else if (plan.rebases.length > 0) {
-    console.log("bookmarks on rebased changes will be pushed after the rebase");
   }
   if (plan.newBookmarks.length > 0) {
     console.log(
