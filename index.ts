@@ -568,6 +568,30 @@ function plansToString(plans: PRPlan[]): string {
   return result;
 }
 
+function prPlanLabel(plan: PRPlan): string {
+  return plan.existingPr
+    ? `#${plan.existingPr.number} ${plan.existingPr.title}`
+    : plan.headBookmark;
+}
+
+function rebasePlansToString(
+  plans: PRPlan[],
+  rebasedChanges: string[],
+): string {
+  const rebased = new Set(rebasedChanges);
+  const plansByHead = new Map(plans.map((plan) => [plan.headBookmark, plan]));
+  const affected = plans.filter((plan) => rebased.has(plan.change));
+
+  if (affected.length === 0) return "";
+
+  return `rebase these PRs:\n${affected
+    .map((plan) => {
+      const base = plansByHead.get(plan.baseBranch);
+      return `${prPlanLabel(plan)} -> ${base ? prPlanLabel(base) : plan.baseBranch}`;
+    })
+    .join("\n")}\n`;
+}
+
 // Stack entries in `changes` order (oldest first). Plans for changes with an
 // existing PR carry its number; planned-but-uncreated PRs have none.
 function stackEntriesForPlans(
@@ -736,8 +760,36 @@ async function mergedTailFor(
   return unique([...detected, ...displacedMerged, ...carried]);
 }
 
-function rebaseCommandFor(source: MergedAncestorPr): string {
-  return `jj rebase -s '${source.headRefOid}+ & mutable()' -d 'trunk()'`;
+async function changesRewrittenByOperation(
+  changes: string[],
+  operation?: string,
+): Promise<string[]> {
+  if (operation === undefined || changes.length === 0) return [];
+
+  const revset = changes.join(" | ");
+  const template = `'change_id ++ "\\t" ++ commit_id ++ "\\n"'`;
+  const commitIds = async (atOperation: string = "") =>
+    new Map(
+      (
+        await jjStdoutLines(
+          `${atOperation}log --no-graph -r ${shellQuote(revset)} -T ${template}`,
+        )
+      ).map((line) => {
+        const [change, commit] = line.split("\t");
+        return [change!, commit!] as const;
+      }),
+    );
+
+  const [before, after] = await Promise.all([
+    commitIds(),
+    commitIds(`--at-op ${shellQuote(operation)} `),
+  ]);
+  return changes.filter(
+    (change) =>
+      before.get(change) !== undefined &&
+      after.get(change) !== undefined &&
+      before.get(change) !== after.get(change),
+  );
 }
 
 // Builds the rebased repository state without making it visible. Each rebase
@@ -779,6 +831,7 @@ interface ExecutionPlan {
   pushPreview: PushPlan | null; // from planPush
   rebases: MergedAncestorPr[]; // stranded stacks to rebase onto trunk first
   rebaseOperation?: string; // exact staged result to integrate after confirmation
+  rebasedChanges: string[]; // changes rewritten by the staged operation
   mergedTail: number[]; // merged ancestor PRs kept below the trunk line
   newBookmarks: PlannedBookmark[]; // named but NOT yet pushed
   untrackedHeads: string[]; // pre-existing local head bookmarks tracking no remote
@@ -982,6 +1035,11 @@ export async function main(spinner: Ora, args: CliArgs) {
     process.exit(0);
   }
 
+  const rebasedChanges = await changesRewrittenByOperation(
+    changes,
+    rebaseOperation,
+  );
+
   const bookmarksAndPRs = await resolveBookmarks(changes);
   const newBookmarks = bookmarksAndPRs.filter(
     (bookmark) => bookmark.kind === "planned",
@@ -1026,6 +1084,7 @@ export async function main(spinner: Ora, args: CliArgs) {
     pushPreview,
     rebases: detection.rebaseSources,
     rebaseOperation,
+    rebasedChanges,
     mergedTail,
     newBookmarks,
     untrackedHeads,
@@ -1038,14 +1097,11 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   // Render: one summary of everything the run would do.
   spinner.stop();
-  if (plan.rebases.length > 0) {
-    console.log("Merged PRs left the stack; stranded changes will be rebased:");
-    for (const source of plan.rebases) {
-      console.log(
-        `  PR #${source.prNumber} (${source.headRefName}) merged: $ ${rebaseCommandFor(source)}`,
-      );
-    }
-  }
+  const rebaseSummary = rebasePlansToString(
+    plan.prPlans,
+    plan.rebasedChanges,
+  );
+  if (rebaseSummary) console.log(rebaseSummary);
   if (plan.pushPreview !== null) {
     console.log(plan.pushPreview.raw);
   }

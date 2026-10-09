@@ -2076,9 +2076,8 @@ describe("merged ancestor PRs", () => {
     );
 
     expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
-    expect(stdout).toContain(
-      `PR #1 (test/jj/parent-work) merged: $ jj rebase -s '${parentSha}+ & mutable()' -d 'trunk()'`,
-    );
+    expect(stdout).toContain("rebase these PRs:\n#2 child work -> main");
+    expect(stdout).not.toContain(parentSha);
 
     // The child now sits on the latest trunk commit...
     expect(await firstLine(repo, "test/jj/child-work-")).toBe(
@@ -2145,7 +2144,7 @@ describe("merged ancestor PRs", () => {
     // nor as a base rung; the child's base moves to trunk.
     expect(stdout).not.toContain("create these PRs");
     expect(stdout).toContain("2 main (from test/jj/parent-work)");
-    expect(stdout).toContain(`jj rebase -s '${parentSha}+ & mutable()'`);
+    expect(stdout).toContain("rebase these PRs:\n#2 child work -> main");
 
     expect(await firstLine(repo, "test/jj/child-work-")).toBe(
       "parent work (#1)",
@@ -2204,7 +2203,7 @@ describe("merged ancestor PRs", () => {
     );
 
     expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
-    expect(stdout).not.toContain("Merged PRs left the stack");
+    expect(stdout).not.toContain("rebase these PRs");
     expect(await commitSha(repo, "test/jj/parent-work")).toBe(parentSha);
     expect(await commitSha(repo, "test/jj/child-work")).toBe(childSha);
     expect(await remoteBranchSha(origin, "test/jj/child-work")).toBe(childSha);
@@ -2252,9 +2251,7 @@ describe("merged ancestor PRs", () => {
     const result = await run();
     const stdout = result.stdout.toString();
     expect(result.exitCode, `${stdout}\n${result.stderr.toString()}`).toBe(0);
-    expect(stdout).toContain(
-      `jj rebase -s '${parentSha}+ & mutable()' -d 'trunk()'`,
-    );
+    expect(stdout).toContain("rebase these PRs:\n#2 child work -> main");
     // The planned stack section already shows the merged parent in the tail.
     expect(stdout).toContain(`- ${pull(2)}\n- \`main\`\n- ${pull(1)}`);
     expect(stdout).toContain("would update description for PR #2");
@@ -2278,7 +2275,7 @@ describe("merged ancestor PRs", () => {
     // Repeated dry runs keep reporting the same plan.
     const again = await run();
     expect(again.stdout.toString()).toContain(
-      `jj rebase -s '${parentSha}+ & mutable()' -d 'trunk()'`,
+      "rebase these PRs:\n#2 child work -> main",
     );
 
     // The speculative rebases are not part of the visible operation log.
@@ -2335,8 +2332,9 @@ describe("merged ancestor PRs", () => {
     expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
     // One rebase, from the tipmost merged head; the deeper merged PR's
     // commits stay behind (their content is in trunk).
-    expect(stdout).toContain(`jj rebase -s '${middleSha}+ & mutable()'`);
-    expect(stdout).not.toContain(`jj rebase -s '${parentSha}+`);
+    expect(stdout).toContain("rebase these PRs:\n#3 child work -> main");
+    expect(stdout).not.toContain(parentSha);
+    expect(stdout).not.toContain(middleSha!);
 
     expect(await firstLine(repo, "test/jj/child-work-")).toBe(
       "middle work (#2)",
@@ -2393,7 +2391,7 @@ describe("merged ancestor PRs", () => {
     expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
     // Nothing to rebase -- but #1, displaced from the live stack, is
     // confirmed merged via gh pr view and kept below the trunk line.
-    expect(stdout).not.toContain("jj rebase -s");
+    expect(stdout).not.toContain("rebase these PRs");
     const stackAfter = `## PR Stack\n- ${pull(2)}\n- \`main\`\n- ${pull(1)}\n`;
     const ghState = JSON.parse(await readFile(statePath, "utf8"));
     const childPr = ghState.prs.find(
@@ -2443,7 +2441,7 @@ describe("merged ancestor PRs", () => {
 
     const stdout = result.stdout.toString();
     expect(result.exitCode, `${stdout}\n${result.stderr.toString()}`).toBe(0);
-    expect(stdout).not.toContain("jj rebase -s");
+    expect(stdout).not.toContain("rebase these PRs");
     // The closed PR is neither in the live stack nor carried in the tail.
     expect(stdout).toContain(`- ${pull(2)}\n- \`main\`\n`);
     expect(stdout).not.toContain(`- ${pull(1)}`);
@@ -2493,6 +2491,6 @@ describe("merged ancestor PRs", () => {
     const stderr = result.stderr.toString();
     expect(result.exitCode, `${stdout}\n${stderr}`).toBe(0);
     expect(stderr).toContain("merged-PR detection skipped");
-    expect(stdout).not.toContain("jj rebase -s");
+    expect(stdout).not.toContain("rebase these PRs");
   }, 30000);
 });
