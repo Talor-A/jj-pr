@@ -35,8 +35,10 @@ import {
   PrStateSchema,
   PullRequestListSchema,
   PullRequestSchema,
+  PullRequestStackMembershipSchema,
   RepoSchema,
   type PullRequest,
+  type PullRequestStackMembership,
 } from "./lib/schema";
 import pkg from "./package.json";
 
@@ -438,6 +440,11 @@ interface PRPlanNoop {
 }
 type PRPlan = PRPlanCreate | PRPlanUpdate | PRPlanNoop;
 
+interface NativeStackBaseUpdateBlocker {
+  plan: PRPlanUpdate;
+  stack: NonNullable<PullRequestStackMembership["stack"]>;
+}
+
 async function createPrPlans(
   bookmarksAndPRs: ResolvedBookmark[],
   trunk: string,
@@ -478,6 +485,33 @@ async function createPrPlans(
     ),
   );
   return plans;
+}
+
+// The current base-update path uses `gh pr edit`, whose GraphQL mutation
+// rejects pull requests that belong to a native GitHub stack. Detect those
+// updates while the run is still read-only so an earlier PR creation or push
+// cannot succeed before the base update fails.
+async function nativeStackBaseUpdateBlockers(
+  plans: PRPlan[],
+  nameWithOwner: string,
+): Promise<NativeStackBaseUpdateBlocker[]> {
+  const updates = plans.filter(
+    (plan): plan is PRPlanUpdate => plan.action === "update",
+  );
+
+  return (
+    await Promise.all(
+      updates.map(async (plan) => {
+        const pr = await execToSchema(
+          PullRequestStackMembershipSchema,
+          `gh api ${shellQuote(
+            `repos/${nameWithOwner}/pulls/${plan.existingPr.number}`,
+          )} -H ${shellQuote("X-GitHub-Api-Version: 2026-03-10")}`,
+        );
+        return pr.stack === null ? undefined : { plan, stack: pr.stack };
+      }),
+    )
+  ).filter((blocker) => blocker !== undefined);
 }
 
 function plansToString(plans: PRPlan[]): string {
@@ -749,6 +783,7 @@ interface ExecutionPlan {
   newBookmarks: PlannedBookmark[]; // named but NOT yet pushed
   untrackedHeads: string[]; // pre-existing local head bookmarks tracking no remote
   prPlans: PRPlan[];
+  nativeStackBaseUpdateBlockers: NativeStackBaseUpdateBlocker[];
   changes: string[]; // oldest-first change ids
   trunk: string;
   nameWithOwner: string;
@@ -960,6 +995,11 @@ export async function main(spinner: Ora, args: CliArgs) {
     throw new Error("no plans to execute");
   }
 
+  const baseUpdateBlockers = await nativeStackBaseUpdateBlockers(
+    prPlans,
+    repo.nameWithOwner,
+  );
+
   const newBookmarkNames = new Set(newBookmarks.map((b) => b.headBookmark));
   const untrackedHeads = await untrackedLocalBookmarks(
     revset,
@@ -990,6 +1030,7 @@ export async function main(spinner: Ora, args: CliArgs) {
     newBookmarks,
     untrackedHeads,
     prPlans,
+    nativeStackBaseUpdateBlockers: baseUpdateBlockers,
     changes,
     trunk,
     nameWithOwner: repo.nameWithOwner,
@@ -1019,6 +1060,22 @@ export async function main(spinner: Ora, args: CliArgs) {
     );
   }
   console.log(plansToString(plan.prPlans));
+
+  if (plan.nativeStackBaseUpdateBlockers.length > 0) {
+    console.error(
+      "cannot apply this plan because jj-pr's current base-update path does not support pull requests in native GitHub stacks:",
+    );
+    for (const { plan: blocked, stack } of plan.nativeStackBaseUpdateBlockers) {
+      console.error(
+        `  PR #${blocked.existingPr.number}: ${blocked.existingPr.baseRefName} -> ${blocked.baseBranch}; ` +
+          `stack #${stack.number}, position ${stack.position} of ${stack.size}`,
+      );
+    }
+    console.error(
+      "jj-pr cannot yet change base branches for pull requests in a native GitHub stack; no changes were applied.",
+    );
+    process.exit(1);
+  }
 
   if (args.dryRun) {
     const stackMarkdown = renderStackMarkdown(

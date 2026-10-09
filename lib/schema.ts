@@ -28,6 +28,20 @@ export const PullRequestListSchema = z.preprocess(
   parseJsonPreprocessor,
   z.array(PullRequestSchema),
 );
+export const PullRequestStackMembershipSchema = z.preprocess(
+  parseJsonPreprocessor,
+  z.object({
+    number: z.number(),
+    stack: z
+      .object({
+        number: z.number(),
+        position: z.number(),
+        size: z.number(),
+        base: z.object({ ref: z.string() }),
+      })
+      .nullable(),
+  }),
+);
 export const RepoSchema = z.preprocess(
   parseJsonPreprocessor,
   z.object({ nameWithOwner: z.string() }),
@@ -73,3 +87,6 @@ export const JJLogItemJsonSchema = z.preprocess(
 );
 
 export type PullRequest = z.infer<typeof PullRequestSchema>;
+export type PullRequestStackMembership = z.infer<
+  typeof PullRequestStackMembershipSchema
+>;

@@ -12,6 +12,12 @@ interface FakePullRequest {
   headSha?: string;
   mergeCommitSha?: string;
   commits?: string[]; // shas the PR's branch contained, for the api handler
+  stack?: {
+    number: number;
+    position: number;
+    size: number;
+    base: { ref: string };
+  } | null;
 }
 
 interface FakeGhState {
@@ -99,6 +105,15 @@ if (args[0] === "pr" && args[1] === "list") {
 // "List pull requests associated with a commit". Matches PRs whose recorded
 // branch commits (or head sha) include the probed sha.
 if (args[0] === "api") {
+  const pull = args[1]?.match(/^repos\/[^/]+\/[^/]+\/pulls\/(\d+)$/);
+  if (pull) {
+    const number = Number(pull[1]);
+    const pr = state.prs.find((item) => item.number === number);
+    if (!pr) throw new Error(`No fake PR #${number}`);
+    console.log(JSON.stringify({ number, stack: pr.stack ?? null }));
+    process.exit(0);
+  }
+
   const pulls = args[1]?.match(
     /^repos\/[^/]+\/[^/]+\/commits\/([^/]+)\/pulls$/,
   );

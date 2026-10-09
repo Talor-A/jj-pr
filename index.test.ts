@@ -763,6 +763,110 @@ describe("main", () => {
     ]);
   }, 15000);
 
+  test("rejects inserting a PR into a native GitHub stack before mutating anything", async () => {
+    const { origin, repo } = await setupTempJjRepo();
+    const jj = new JJ(repo);
+    await setupMainBranch(repo);
+
+    await writeFile(join(repo, "base.txt"), "base\n");
+    await jj.describe("@", "base");
+    await jj.bookmark_create("@", "test/jj/base");
+    await jj.git_push_bookmark("test/jj/base");
+
+    await jj.new();
+    await writeFile(join(repo, "top.txt"), "top\n");
+    await jj.describe("@", "top");
+    await jj.bookmark_create("@", "test/jj/top");
+    await jj.git_push_bookmark("test/jj/top");
+    await jj.new();
+
+    const remoteTopBefore = (
+      await $`git --git-dir ${origin} rev-parse refs/heads/test/jj/top`.text()
+    ).trim();
+
+    // Insert an unbookmarked change between the two existing PRs. Applying
+    // this plan would first create the middle PR, then fail when `gh pr edit`
+    // tries to retarget the native-stack top PR onto it.
+    await jj.new("test/jj/base");
+    await writeFile(join(repo, "middle.txt"), "middle\n");
+    await jj.describe("@", "middle");
+    const middleChange = (
+      await $`jj --config-file ${jjconf} log -r @ --no-graph -T 'change_id ++ "\n"'`
+        .cwd(repo)
+        .text()
+    ).trim();
+    await jj.exec(`rebase -s test/jj/top -d ${middleChange}`);
+    await jj.new("test/jj/top");
+
+    const stack = {
+      number: 7,
+      size: 2,
+      base: { ref: "main" },
+    };
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 3,
+      prs: [
+        {
+          number: 1,
+          head: "test/jj/base",
+          title: "base",
+          baseRefName: "main",
+          body: "base body",
+          stack: { ...stack, position: 1 },
+        },
+        {
+          number: 2,
+          head: "test/jj/top",
+          title: "top",
+          baseRefName: "test/jj/base",
+          body: "top body",
+          stack: { ...stack, position: 2 },
+        },
+      ],
+    });
+
+    const result = await $`${bun} ${pathToIndexFile} --yes ${middleChange}`
+      .cwd(repo)
+      .env({
+        ...process.env,
+        FAKE_GH_STATE: statePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      })
+      .nothrow()
+      .quiet();
+
+    const stdout = result.stdout.toString();
+    const stderr = result.stderr.toString();
+    expect(result.exitCode, `${stdout}\n${stderr}`).toBe(1);
+    expect(stdout).toContain("create these PRs:\ntest/jj/middle -> test/jj/base");
+    expect(stdout).toContain(
+      "update these PR base branches:\n2 test/jj/middle (from test/jj/base)",
+    );
+    expect(stderr).toContain(
+      "PR #2: test/jj/base -> test/jj/middle; stack #7, position 2 of 2",
+    );
+    expect(stderr).toContain("no changes were applied");
+    expect(stdout).not.toContain("apply these changes?");
+
+    const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(
+      ghState.commands.some(
+        (command: string[]) =>
+          command[0] === "pr" &&
+          (command[1] === "create" || command[1] === "edit"),
+      ),
+    ).toBe(false);
+
+    const remoteTopAfter = (
+      await $`git --git-dir ${origin} rev-parse refs/heads/test/jj/top`.text()
+    ).trim();
+    expect(remoteTopAfter).toBe(remoteTopBefore);
+    const middleRemote = await $`git --git-dir ${origin} show-ref --verify refs/heads/test/jj/middle`
+      .nothrow()
+      .quiet();
+    expect(middleRemote.exitCode).not.toBe(0);
+  }, 15000);
+
   test("--yes auto-confirms without prompting", async () => {
     const { repo } = await setupTempJjRepo();
     const jj = new JJ(repo);
