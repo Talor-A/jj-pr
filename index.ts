@@ -209,11 +209,9 @@ function sanitizeBookmarkDescription(
   return slug || fallback;
 }
 
-// A push plan: `raw` is jj's own preview text (still what gets rendered --
-// jj's wording is better than anything we'd reconstruct), `moves` is the
-// same content parsed into structured PushMove records for callers that
-// need to reason about individual ref updates (e.g. a future
-// `jj-pr.allow` config gating confirmation per move kind).
+// A push plan keeps jj's original preview as a fallback for output from a
+// future jj version that we cannot yet summarize. Recognized bookmark moves
+// are rendered from the structured records below instead.
 interface PushPlan {
   raw: string;
   moves: PushMove[];
@@ -568,6 +566,65 @@ function plansToString(plans: PRPlan[]): string {
   return result;
 }
 
+function prPlanLabel(plan: PRPlan): string {
+  return plan.existingPr
+    ? `#${plan.existingPr.number} ${plan.existingPr.title}`
+    : plan.headBookmark;
+}
+
+function mergedPrsToString(merged: MergedAncestorPr[]): string {
+  if (merged.length === 0) return "";
+
+  return `these PRs have merged:\n${merged
+    .map((pr) => `#${pr.prNumber} ${pr.title}`)
+    .join("\n")}\n`;
+}
+
+function rebasePlansToString(
+  plans: PRPlan[],
+  rebasedChanges: string[],
+): string {
+  const rebased = new Set(rebasedChanges);
+  const plansByHead = new Map(plans.map((plan) => [plan.headBookmark, plan]));
+  const affected = plans.filter((plan) => rebased.has(plan.change));
+
+  if (affected.length === 0) return "";
+
+  return `rebase these PRs:\n${affected
+    .map((plan) => {
+      const base = plansByHead.get(plan.baseBranch);
+      return `${prPlanLabel(plan)} -> ${base ? prPlanLabel(base) : plan.baseBranch}`;
+    })
+    .join("\n")}\n`;
+}
+
+function pushPlansToString(push: PushPlan, plans: PRPlan[]): string {
+  if (push.moves.length === 0) return push.raw;
+
+  const plansByHead = new Map(plans.map((plan) => [plan.headBookmark, plan]));
+  const lines = push.moves.map((move) => {
+    const plan = plansByHead.get(move.bookmark);
+    const label = plan ? prPlanLabel(plan) : move.bookmark;
+
+    switch (move.kind) {
+      case "new":
+        return `${label}: create`;
+      case "forward":
+        return `${label}: move forward`;
+      case "sideways":
+        return `${label}: move sideways`;
+      case "backward":
+        return `${label}: move backward`;
+      case "delete":
+        return `${label}: delete`;
+      case "unknown":
+        return move.raw.trim();
+    }
+  });
+
+  return `push these branches:\n${lines.join("\n")}`;
+}
+
 // Stack entries in `changes` order (oldest first). Plans for changes with an
 // existing PR carry its number; planned-but-uncreated PRs have none.
 function stackEntriesForPlans(
@@ -736,8 +793,36 @@ async function mergedTailFor(
   return unique([...detected, ...displacedMerged, ...carried]);
 }
 
-function rebaseCommandFor(source: MergedAncestorPr): string {
-  return `jj rebase -s '${source.headRefOid}+ & mutable()' -d 'trunk()'`;
+async function changesRewrittenByOperation(
+  changes: string[],
+  operation?: string,
+): Promise<string[]> {
+  if (operation === undefined || changes.length === 0) return [];
+
+  const revset = changes.join(" | ");
+  const template = `'change_id ++ "\\t" ++ commit_id ++ "\\n"'`;
+  const commitIds = async (atOperation: string = "") =>
+    new Map(
+      (
+        await jjStdoutLines(
+          `${atOperation}log --no-graph -r ${shellQuote(revset)} -T ${template}`,
+        )
+      ).map((line) => {
+        const [change, commit] = line.split("\t");
+        return [change!, commit!] as const;
+      }),
+    );
+
+  const [before, after] = await Promise.all([
+    commitIds(),
+    commitIds(`--at-op ${shellQuote(operation)} `),
+  ]);
+  return changes.filter(
+    (change) =>
+      before.get(change) !== undefined &&
+      after.get(change) !== undefined &&
+      before.get(change) !== after.get(change),
+  );
 }
 
 // Builds the rebased repository state without making it visible. Each rebase
@@ -777,8 +862,10 @@ async function stageRebases(
 interface ExecutionPlan {
   revset: string;
   pushPreview: PushPlan | null; // from planPush
+  mergedPrs: MergedAncestorPr[]; // merged ancestors removed from the live stack
   rebases: MergedAncestorPr[]; // stranded stacks to rebase onto trunk first
   rebaseOperation?: string; // exact staged result to integrate after confirmation
+  rebasedChanges: string[]; // changes rewritten by the staged operation
   mergedTail: number[]; // merged ancestor PRs kept below the trunk line
   newBookmarks: PlannedBookmark[]; // named but NOT yet pushed
   untrackedHeads: string[]; // pre-existing local head bookmarks tracking no remote
@@ -982,6 +1069,11 @@ export async function main(spinner: Ora, args: CliArgs) {
     process.exit(0);
   }
 
+  const rebasedChanges = await changesRewrittenByOperation(
+    changes,
+    rebaseOperation,
+  );
+
   const bookmarksAndPRs = await resolveBookmarks(changes);
   const newBookmarks = bookmarksAndPRs.filter(
     (bookmark) => bookmark.kind === "planned",
@@ -1024,8 +1116,10 @@ export async function main(spinner: Ora, args: CliArgs) {
   const plan: ExecutionPlan = {
     revset,
     pushPreview,
+    mergedPrs: detection.merged,
     rebases: detection.rebaseSources,
     rebaseOperation,
+    rebasedChanges,
     mergedTail,
     newBookmarks,
     untrackedHeads,
@@ -1038,16 +1132,15 @@ export async function main(spinner: Ora, args: CliArgs) {
 
   // Render: one summary of everything the run would do.
   spinner.stop();
-  if (plan.rebases.length > 0) {
-    console.log("Merged PRs left the stack; stranded changes will be rebased:");
-    for (const source of plan.rebases) {
-      console.log(
-        `  PR #${source.prNumber} (${source.headRefName}) merged: $ ${rebaseCommandFor(source)}`,
-      );
-    }
-  }
+  const mergedSummary = mergedPrsToString(plan.mergedPrs);
+  if (mergedSummary) console.log(mergedSummary);
+  const rebaseSummary = rebasePlansToString(
+    plan.prPlans,
+    plan.rebasedChanges,
+  );
+  if (rebaseSummary) console.log(rebaseSummary);
   if (plan.pushPreview !== null) {
-    console.log(plan.pushPreview.raw);
+    console.log(pushPlansToString(plan.pushPreview, plan.prPlans));
   }
   if (plan.newBookmarks.length > 0) {
     console.log(

@@ -1,8 +1,6 @@
-// Structured view of `jj git push --dry-run` output. The raw text is still
-// what gets rendered to the user (jj's wording/coloring is better than
-// anything we'd reconstruct), but callers that need to reason about
-// individual ref updates -- e.g. a future `jj-pr.allow` config that only
-// prompts for confirmation on certain move kinds -- need each line parsed.
+// Structured view of `jj git push --dry-run` output. Callers render recognized
+// bookmark updates without exposing raw commit IDs, while preserving the
+// original line as a fallback for move kinds added by future jj versions.
 
 interface PushMoveBase {
   bookmark: string;
