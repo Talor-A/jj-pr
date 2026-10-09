@@ -118,12 +118,3 @@ export function combineStdoutAndStderr({
 }): string {
   return `${stdout}${stderr}`;
 }
-
-export async function succeeds(command: string): Promise<boolean> {
-  try {
-    await exec(command);
-    return true;
-  } catch {
-    return false;
-  }
-}

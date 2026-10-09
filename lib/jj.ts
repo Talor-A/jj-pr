@@ -1,5 +1,5 @@
 import { PROD_JJ_CONFIG } from "./config";
-import { exec, mapToStdout } from "./exec";
+import { exec, mapToStdout, shellQuote } from "./exec";
 import { lines } from "./utils";
 
 // All jj-pr commands run against the bundled config so the revset aliases in
@@ -18,6 +18,19 @@ export function jj(args: string): Promise<{ stdout: string; stderr: string }> {
 
 export function jjStdoutLines(args: string): Promise<string[]> {
   return jj(args).then(mapToStdout).then(lines);
+}
+
+// `config get` exits nonzero when a key is unset, which makes it tempting for
+// callers to catch every failure. `config list` represents an unset key as an
+// empty stdout instead, while real config/repository failures still reject.
+export async function jjConfigString(
+  name: string,
+): Promise<string | undefined> {
+  const output = await jj(
+    `--ignore-working-copy config list ${shellQuote(name)} ` +
+      `-T 'value.as_string() ++ "\\n"'`,
+  ).then(mapToStdout);
+  return output.trim() || undefined;
 }
 
 export function parseUnintegratedOperationId(
