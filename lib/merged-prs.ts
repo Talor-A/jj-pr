@@ -1,4 +1,5 @@
-import { execToSchema, shellQuote } from "./exec";
+import { CommandError, execToSchema, shellQuote } from "./exec";
+import { errorMessage } from "./errors";
 import { jjStdoutLines } from "./jj";
 import { CommitPullsSchema } from "./schema";
 
@@ -25,14 +26,6 @@ function commitsFor(revset: string): Promise<string[]> {
   return jjStdoutLines(
     `log --no-graph -r ${shellQuote(revset)} -T 'commit_id ++ "\n"'`,
   );
-}
-
-function errorText(error: unknown): string {
-  if (error && typeof error === "object") {
-    const { stderr, message } = error as { stderr?: string; message?: string };
-    return `${stderr ?? ""}${message ?? ""}`;
-  }
-  return String(error);
 }
 
 // A stack is stranded when its base commit was the head of a PR that has
@@ -65,10 +58,11 @@ export async function detectMergedAncestors(
         `gh api repos/${nameWithOwner}/commits/${probe}/pulls`,
       );
     } catch (error) {
+      if (!(error instanceof CommandError)) throw error;
       // 404/422 means the commit was never pushed (a brand-new stack) --
       // expected and silent. Anything else (offline, auth) degrades to "no
       // rebase" with a single warning.
-      const text = errorText(error);
+      const text = errorMessage(error);
       if (!/HTTP 40[24]|HTTP 422/.test(text) && !warned) {
         warned = true;
         console.error(

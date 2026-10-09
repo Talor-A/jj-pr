@@ -10,7 +10,6 @@ import {
   execWithStdin,
   mapToStdout,
   shellQuote,
-  succeeds,
 } from "./lib/exec";
 import { help, parseCli, type CliArgs } from "./lib/args";
 import { completionScript, isShell, SHELLS } from "./lib/completion";
@@ -46,6 +45,7 @@ import pkg from "./package.json";
 import {
   jj,
   jjCommand,
+  jjConfigString,
   jjStdoutLines,
   parseUnintegratedOperationId,
 } from "./lib/jj";
@@ -58,20 +58,14 @@ let _bookmarkPrefix: string | undefined;
 async function getBookmarkPrefix(): Promise<string> {
   if (_bookmarkPrefix !== undefined) return _bookmarkPrefix;
 
-  const configured = await jj(`config get jj-pr.bookmark-prefix`)
-    .then(mapToStdout)
-    .then((s) => s.trim())
-    .catch(() => ""); // key unset -> jj exits non-zero
+  const configured = await jjConfigString("jj-pr.bookmark-prefix");
 
-  let prefix = configured;
+  let prefix = configured ?? "";
   if (!prefix) {
-    const email = await jj(`config get user.email`)
-      .then(mapToStdout)
-      .then((s) => s.trim())
-      .catch(() => "");
+    const email = (await jjConfigString("user.email")) ?? "";
     const user = email.split("@")[0];
     if (!user) {
-      throw new Error(
+      throw new CliError(
         "Cannot determine a bookmark prefix: set `jj-pr.bookmark-prefix` " +
         "or `user.email` in your jj config.",
       );
@@ -275,7 +269,7 @@ async function ensureTrunk(): Promise<string> {
     .then((x) => x.trim())
     .then(lines);
   if (!trunk[0]) {
-    throw new Error("Unable to find trunk bookmark");
+    throw new CliError("Unable to find trunk bookmark");
   }
 
   if (trunk.includes("main")) {
@@ -293,7 +287,12 @@ async function handleFix(spinner: Ora, revset: string, dryRun: boolean) {
   spinner.start();
   spinner.text = "";
 
-  const hasFixTools = await succeeds(jjCommand(`config get fix.tools`));
+  const hasFixTools =
+    (
+      await jjStdoutLines(
+        `--ignore-working-copy config list fix.tools -T 'name ++ "\\n"'`,
+      )
+    ).length > 0;
 
   if (hasFixTools) {
     spinner.text = "fixing...";
@@ -692,7 +691,7 @@ async function alignPRs(spinner: Ora, plans: PRPlan[]) {
         `gh pr list --head ${headBookmark} --json number,title,baseRefName,body`,
       );
       if (!createdPrs[0]) {
-        throw new Error(`Unable to find PR created for ${headBookmark}`);
+        throw new CliError(`Unable to find PR created for ${headBookmark}`);
       }
 
       const createdPr = cachePr(createdPrs[0], headBookmark);
@@ -730,8 +729,8 @@ async function mergedTailFor(
     const state = await execToSchema(
       PrStateSchema,
       `gh pr view ${String(number)} --json number,state`,
-    ).catch(() => undefined);
-    if (state?.state === "MERGED") displacedMerged.push(number);
+    );
+    if (state.state === "MERGED") displacedMerged.push(number);
   }
 
   return unique([...detected, ...displacedMerged, ...carried]);
@@ -764,7 +763,7 @@ async function stageRebases(
       continue;
     }
     if (!result.stderr.includes("No revisions to rebase.")) {
-      throw new Error(
+      throw new CliError(
         `jj rebase did not report its unintegrated operation id:\n${result.stderr.trim()}`,
       );
     }
