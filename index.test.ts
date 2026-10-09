@@ -2059,6 +2059,53 @@ describe("merged ancestor PRs", () => {
     expect(childPr.baseRefName).toBe("main");
   }, 30000);
 
+  test("does not detach a commit that is also the head of an open PR", async () => {
+    const { origin, repo, parentSha, childSha } =
+      await setupSquashMergedParent({ deleteBranch: false });
+
+    const { binDir, statePath } = await setupFakeGh({
+      nextNumber: 4,
+      prs: [
+        {
+          number: 1,
+          head: "test/jj/already-merged-copy",
+          title: "merged copy",
+          baseRefName: "test/jj/child-work",
+          body: "",
+          state: "closed",
+          mergedAt: "2026-07-07T00:00:00Z",
+          headSha: parentSha,
+        },
+        {
+          number: 2,
+          head: "test/jj/parent-work",
+          title: "parent work",
+          baseRefName: "main",
+          body: "",
+          headSha: parentSha,
+        },
+        {
+          number: 3,
+          head: "test/jj/child-work",
+          title: "child work",
+          baseRefName: "test/jj/parent-work",
+          body: "",
+          headSha: childSha,
+        },
+      ],
+    });
+
+    const { stdout, stderr, exitCode } = await collect(
+      runJjPr(repo, statePath, binDir),
+    );
+
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(stdout).not.toContain("Merged PRs left the stack");
+    expect(await commitSha(repo, "test/jj/parent-work")).toBe(parentSha);
+    expect(await commitSha(repo, "test/jj/child-work")).toBe(childSha);
+    expect(await remoteBranchSha(origin, "test/jj/child-work")).toBe(childSha);
+  }, 30000);
+
   test("dry run logs the rebase but changes nothing", async () => {
     const { origin, repo, parentSha, childSha } =
       await setupSquashMergedParent({ deleteBranch: true });

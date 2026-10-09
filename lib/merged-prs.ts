@@ -78,8 +78,16 @@ export async function detectMergedAncestors(
       continue;
     }
 
+    // A single commit can be the head of multiple PR branches. If any PR with
+    // this exact head is still open, keep it in the stack.
+    const openHeads = new Set(
+      pulls.filter((pull) => pull.state === "open").map((pull) => pull.head.sha),
+    );
     const candidates = pulls.filter(
-      (pull) => pull.merged_at !== null && !merged.has(pull.number),
+      (pull) =>
+        pull.merged_at !== null &&
+        !merged.has(pull.number) &&
+        !openHeads.has(pull.head.sha),
     );
     if (candidates.length === 0) continue;
 
