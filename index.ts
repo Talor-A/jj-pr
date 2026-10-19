@@ -35,10 +35,9 @@ import {
   PrStateSchema,
   PullRequestListSchema,
   PullRequestSchema,
-  PullRequestStackMembershipSchema,
+  PullRequestStackListSchema,
   RepoSchema,
   type PullRequest,
-  type PullRequestStackMembership,
 } from "./lib/schema";
 import pkg from "./package.json";
 
@@ -440,7 +439,11 @@ type PRPlan = PRPlanCreate | PRPlanUpdate | PRPlanNoop;
 
 interface NativeStackBaseUpdateBlocker {
   plan: PRPlanUpdate;
-  stack: NonNullable<PullRequestStackMembership["stack"]>;
+  stack: {
+    number: number;
+    position: number;
+    size: number;
+  };
 }
 
 async function createPrPlans(
@@ -500,13 +503,32 @@ async function nativeStackBaseUpdateBlockers(
   return (
     await Promise.all(
       updates.map(async (plan) => {
-        const pr = await execToSchema(
-          PullRequestStackMembershipSchema,
+        const stacks = await execToSchema(
+          PullRequestStackListSchema,
           `gh api ${shellQuote(
-            `repos/${nameWithOwner}/pulls/${plan.existingPr.number}`,
+            `repos/${nameWithOwner}/stacks?pull_request=${plan.existingPr.number}`,
           )} -H ${shellQuote("X-GitHub-Api-Version: 2026-03-10")}`,
         );
-        return pr.stack === null ? undefined : { plan, stack: pr.stack };
+        const stack = stacks[0];
+        if (stack === undefined) return undefined;
+
+        const position = stack.pull_requests.findIndex(
+          (pr) => pr.number === plan.existingPr.number,
+        );
+        if (position === -1) {
+          throw new Error(
+            `GitHub returned stack #${stack.number} without requested PR #${plan.existingPr.number}`,
+          );
+        }
+
+        return {
+          plan,
+          stack: {
+            number: stack.number,
+            position: position + 1,
+            size: stack.pull_requests.length,
+          },
+        };
       }),
     )
   ).filter((blocker) => blocker !== undefined);
