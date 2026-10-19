@@ -105,12 +105,32 @@ if (args[0] === "pr" && args[1] === "list") {
 // "List pull requests associated with a commit". Matches PRs whose recorded
 // branch commits (or head sha) include the probed sha.
 if (args[0] === "api") {
-  const pull = args[1]?.match(/^repos\/[^/]+\/[^/]+\/pulls\/(\d+)$/);
-  if (pull) {
-    const number = Number(pull[1]);
+  const stacks = args[1]?.match(
+    /^repos\/[^/]+\/[^/]+\/stacks\?pull_request=(\d+)$/,
+  );
+  if (stacks) {
+    const number = Number(stacks[1]);
     const pr = state.prs.find((item) => item.number === number);
     if (!pr) throw new Error(`No fake PR #${number}`);
-    console.log(JSON.stringify({ number, stack: pr.stack ?? null }));
+    if (!pr.stack) {
+      console.log("[]");
+      process.exit(0);
+    }
+
+    const stack = pr.stack;
+    const pullRequests = state.prs
+      .filter((item) => item.stack?.number === stack.number)
+      .sort((a, b) => (a.stack?.position ?? 0) - (b.stack?.position ?? 0))
+      .map((item) => ({ number: item.number }));
+    console.log(
+      JSON.stringify([
+        {
+          number: stack.number,
+          base: stack.base,
+          pull_requests: pullRequests,
+        },
+      ]),
+    );
     process.exit(0);
   }
 

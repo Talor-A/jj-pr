@@ -849,6 +849,12 @@ describe("main", () => {
     expect(stdout).not.toContain("apply these changes?");
 
     const ghState = JSON.parse(await readFile(statePath, "utf8"));
+    expect(ghState.commands).toContainEqual([
+      "api",
+      "repos/example/repo/stacks?pull_request=2",
+      "-H",
+      "X-GitHub-Api-Version: 2026-03-10",
+    ]);
     expect(
       ghState.commands.some(
         (command: string[]) =>
